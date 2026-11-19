@@ -5,6 +5,7 @@ import { buildArena, updateShotClockDisplays } from './arena.js';
 import { makePlayerMesh, makeReflection, animatePlayer, handWorld, jerseyTexture, shortsTexture } from './player.js';
 import { initAudio, sfx, setMuted } from './audio.js';
 import { createExtras } from './extras.js';
+import { createJumbotron } from './jumbotron.js';
 
 const params = new URLSearchParams(location.search);
 const store = { get(k, d) { try { const v = localStorage.getItem('bb5v5.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('bb5v5.' + k, JSON.stringify(v)); } catch (e) { } } };
@@ -65,6 +66,26 @@ const ATTR = [
   { scale: 1.08, spd: 0.92, shoot: 0.9, three: 0.55, ft: 0.82, def: 1.05, blk: 1.35, reb: 1.25, handle: 0.82, dunk: true, hcm: 213 },
 ];
 const NUMS = [[3, 11, 7, 23, 34, 0, 8, 15, 20, 42], [1, 5, 9, 21, 33, 2, 10, 14, 25, 50]];
+// 球員特長：在位置的基本能力上再乘倍率，讓每個人強項、弱項明顯
+const ARCH = {
+  handle: { name: '控球大師', m: { handle: 1.22, pass: 1.25, spd: 1.03, three: 0.96 } },
+  shooter: { name: '神射手', m: { three: 1.2, shoot: 1.1, ft: 1.1, def: 0.9, handle: 0.94 } },
+  speed: { name: '飆速', m: { spd: 1.1, handle: 1.06, jmp: 1.04, three: 0.9, shoot: 0.96 } },
+  stopper: { name: '防守尖兵', m: { def: 1.28, spd: 1.03, three: 0.9, shoot: 0.94, handle: 0.94 } },
+  all: { name: '全能', m: { spd: 1.03, shoot: 1.04, three: 1.04, def: 1.04, reb: 1.05, handle: 1.04, pass: 1.05 } },
+  slasher: { name: '灌籃高手', m: { jmp: 1.12, spd: 1.04, three: 0.82, shoot: 0.95, slash: 1 } },
+  board: { name: '籃板悍將', m: { reb: 1.28, blk: 1.1, shoot: 0.92, three: 0.85, spd: 0.97 } },
+  rim: { name: '護框', m: { blk: 1.32, reb: 1.1, def: 1.06, spd: 0.94, ft: 0.85, three: 0.75 } },
+  post: { name: '低位', m: { post: 1.35, shoot: 1.02, reb: 1.05, three: 0.7, spd: 0.96 } },
+  stretch: { name: '空間大個', m: { three: 1.5, shoot: 1.06, ft: 1.06, reb: 0.9, blk: 0.88 } },
+};
+const TEAM_ARCH = [['handle', 'shooter', 'all', 'board', 'rim', 'speed', 'stopper', 'slasher', 'stretch', 'post'],
+  ['speed', 'stopper', 'slasher', 'stretch', 'post', 'handle', 'shooter', 'all', 'board', 'rim']];
+// 能力值換算成 40～99 分顯示
+const RATE = { three: [0.4, 1.4], shoot: [0.8, 1.2], spd: [0.85, 1.2], handle: [0.7, 1.45], def: [0.9, 1.35], reb: [0.65, 1.6], blk: [0.5, 1.8], jmp: [0.95, 1.15], post: [0.9, 1.4] };
+const RATE_NAME = { three: '三分', shoot: '中投', spd: '速度', handle: '運球', def: '防守', reb: '籃板', blk: '火鍋', jmp: '彈跳', post: '背打' };
+const rating = (p, k) => Math.round(clamp(40 + (p[k] - RATE[k][0]) / (RATE[k][1] - RATE[k][0]) * 59, 40, 99));
+const topRatings = p => Object.keys(RATE).sort((a, b) => rating(p, b) - rating(p, a)).slice(0, 2).map(k => `${RATE_NAME[k]} ${rating(p, k)}`).join('　');
 const roster = [[], []], teams = [[], []];
 let players = [];
 const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 32), new THREE.MeshBasicMaterial({ color: 0xffd400, transparent: true, opacity: 0.9, depthWrite: false }));
@@ -72,8 +93,11 @@ ring.rotation.x = -Math.PI / 2; ring.position.y = 0.015; scene.add(ring);
 const newStats = () => ({ pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, pf: 0, tov: 0, sec: 0 });
 for (let t = 0; t < 2; t++) for (let i = 0; i < 10; i++) {
   const role = i % 5, bench = i >= 5;
-  const a = { ...ATTR[role] };
-  if (bench) for (const k of ['spd', 'shoot', 'three', 'ft', 'def', 'blk', 'reb', 'handle']) a[k] *= rand(0.9, 0.98);
+  const a = { pass: 1, jmp: 1, post: 1, slash: 0, ...ATTR[role] };
+  const ar = ARCH[TEAM_ARCH[t][i]]; a.arch = ar.name;
+  for (const [k, v] of Object.entries(ar.m)) a[k] = k === 'slash' ? 1 : a[k] * v;
+  if (ar === ARCH.slasher) a.dunk = true;
+  if (bench) for (const k of ['spd', 'shoot', 'three', 'ft', 'def', 'blk', 'reb', 'handle']) a[k] *= 0.97;
   a.scale *= bench ? rand(0.98, 1.02) : 1; a.hcm = Math.round(a.hcm * a.scale / ATTR[role].scale);
   const skin = t * 10 + i * 3 + (t ? 1 : 0);
   const rig = makePlayerMesh(t, role, NUMS[t][i], a.scale, skin);
@@ -89,6 +113,7 @@ function rebuildLists() {
   players = [...teams[0], ...teams[1]];
 }
 const refRig = makePlayerMesh(2, 0, 12, 0.98, 6); scene.add(refRig.root);
+const jumbo = createJumbotron(scene, { feed: SET.quality !== 'low' });
 const extras = createExtras(scene, { dancers: SET.quality !== 'low' });
 for (const a of extras.list) a.shadow = makeShadow(0.8);
 const referee = { rig: refRig, refl: makeReflection(refRig, scene), pos: new THREE.Vector3(0, 0, -HZ - 0.7), vel: new THREE.Vector3(), facing: 0, jy: 0, runPhase: 0, pose: 'run', scale: 0.98, landT: 0, dribblePh: 0, shadow: makeShadow(0.9) };
@@ -275,7 +300,7 @@ function handBall(p) {
 const chest = p => new THREE.Vector3(p.pos.x, 1.3 * p.scale + p.jy, p.pos.z);
 
 // ================= 球權 =================
-function jump(p, v) { if (p.jy > 0.001 || p.jv > 0) return false; p.jv = v * (0.9 + 0.1 * p.sta); p.jy = 0.001; return true; }
+function jump(p, v) { if (p.jy > 0.001 || p.jv > 0) return false; p.jv = v * (0.9 + 0.1 * p.sta) * Math.sqrt(p.jmp || 1); p.jy = 0.001; return true; }
 function setPoss(team) {
   if (team !== S.poss) { S.shotClock = 24; S.poss = team; S.fc = false; S.bcT = 0; for (const p of players) { p.keyT = 0; p.dkeyT = 0; p.post = null; } S.screen = [null, null]; if (team >= 0) aiCoach(team); }
 }
@@ -336,7 +361,12 @@ function shotProb(p, d, cd, three, kind) {
   if (kind === 'jump') b *= three ? p.three : p.shoot;
   if (p.openT > 0) cd += 1.0; // 後撤步拉開空間
   const cPen = kind === 'dunk' ? 0.5 : (kind === 'layup' ? 0.7 : 1);
-  if (cd < 0.9) b -= 0.18 * cPen; else if (cd < 1.4) b -= 0.08 * cPen; else if (cd < 2.2) b -= 0.03 * cPen;
+  const nd = nearestOpp(p)[0], dq = nd ? nd.def : 1; // 防守好的人貼身，影響更大
+  if (cd < 0.9) b -= 0.18 * cPen * dq; else if (cd < 1.4) b -= 0.08 * cPen * dq; else if (cd < 2.2) b -= 0.03 * cPen * dq;
+  // 護框中鋒在籃下：上籃、灌籃更難
+  if ((kind === 'layup' || kind === 'dunk') && nd && nd.blk > 1.6 && hyp(nd.pos.x - basketX(p.team), nd.pos.z) < 2.2 && cd < 1.8) b -= kind === 'dunk' ? 0.06 : 0.08;
+  if (kind === 'layup' && p.slash) b += 0.04;
+  if (kind === 'hook') b *= p.post;
   b -= (1 - p.sta) * 0.1;
   return b;
 }
@@ -344,7 +374,8 @@ function shotProb(p, d, cd, three, kind) {
 function shotWindow(p, d, cd, three, moving) {
   let w = 0.075 * (three ? p.three : p.shoot);
   w *= d < 5 ? 1.15 : d < 7.24 ? 1.0 : d < 8.6 ? 0.85 : 0.55;
-  w *= cd < 0.9 ? 0.65 : cd < 1.5 ? 0.82 : 1;
+  const nd = nearestOpp(p)[0], dq = nd ? clamp(nd.def, 0.9, 1.35) : 1;
+  w *= cd < 0.9 ? 0.65 / dq : cd < 1.5 ? 0.82 / Math.sqrt(dq) : 1;
   if (moving) w *= 0.8;
   w *= 0.85 + 0.15 * p.sta;
   return clamp(w, 0.025, 0.09);
@@ -380,7 +411,7 @@ function startShot(p) {
     return;
   }
   if (d < 2.4 || (d < 3.6 && movingToward && hyp(p.vel.x, p.vel.z) > 3)) {
-    const dunk = p.dunk && d < 3.0 && p.sta > 0.3 && (isUser(p) ? (inp.sprintHeld || p.role >= 3) : (cd > 1.2 && d < 2.6 && Math.random() < 0.5));
+    const dunk = p.dunk && d < 3.0 && p.sta > 0.3 && (isUser(p) ? (inp.sprintHeld || p.role >= 3) : (cd > 1.2 && d < 2.6 && Math.random() < (p.slash ? 0.85 : 0.45)));
     startLayup(p, dunk);
   } else {
     p.action = 'shoot'; p.actT = 0; p.released = false; p.vel.set(0, 0, 0); p.shotKind = 'jump';
@@ -523,7 +554,7 @@ function doPass(p, to, speed = 12.5) {
   if (S.phase === 'live' && to.dunk && to.sta > 0.3 && rolling && distB(to) < 4.4 && distB(p) > 3.5 && nearestOpp(to)[1] > 1.2 && !to.jy && (isUser(p) ? inp.sprintHeld : Math.random() < 0.2)) return lobPass(p, to);
   const from = handBall(p); from.y = Math.max(from.y, 1.15 * p.scale);
   let tgt = chest(to); const d = from.distanceTo(tgt);
-  let T = clamp(d / speed, 0.15, 1.3);
+  let T = clamp(d / (speed * (0.9 + 0.1 * p.pass)), 0.15, 1.3);
   tgt.addScaledVector(to.vel, T * (to.cutting > 0 ? 1.05 : 0.85)); tgt.y = 1.25 * to.scale;
   const v = tgt.clone().sub(from).divideScalar(T); v.y += 0.5 * G * T;
   ball.state = 'pass'; ball.holder = null; ball.pos.copy(from); ball.vel.copy(v); ball.lastTeam = p.team;
@@ -585,7 +616,7 @@ function dreamShake(p) {
   p.action = 'dream'; p.actT = 0; p.post = null; p.dreamSide = Math.random() < 0.5 ? 1 : -1;
   if (isUser(p)) showShotLabel('夢幻腳步', true);
   const g = guardOf(p);
-  if (g && hyp(g.pos.x - p.pos.x, g.pos.z - p.pos.z) < 2 && Math.random() < 0.42 * p.handle / g.def + 0.12) { g.slowT = 0.95; if (Math.random() < 0.3) { msg('夢幻腳步！', 'big'); sfx.oh(); } }
+  if (g && hyp(g.pos.x - p.pos.x, g.pos.z - p.pos.z) < 2 && Math.random() < 0.42 * p.handle * p.post / g.def + 0.12) { g.slowT = 0.95; if (Math.random() < 0.3) { msg('夢幻腳步！', 'big'); sfx.oh(); } }
 }
 function doMove(p, kind, side) {
   if (p.moveCD > 0 || p.jy > 0 || p.action || ball.holder !== p) return;
@@ -826,7 +857,7 @@ function stepBall(dt) {
       if (ps.tried.has(q)) continue;
       if (hyp(q.pos.x - ball.pos.x, q.pos.z - ball.pos.z) < 0.55 && ball.pos.y < 2.3 * q.scale + q.jy) {
         ps.tried.add(q);
-        if (Math.random() < 0.17 * q.def * (q.team === 1 ? D().steal : 1)) { S.stats[q.team].stl++; q.st.stl++; S.stats[ps.from.team].tov++; ps.from.st.tov++; msg('抄截！'); sfx.steal(); sfx.oh(); giveBall(q, 'steal'); return; }
+        if (Math.random() < 0.17 * q.def / (ps.from.pass || 1) * (q.team === 1 ? D().steal : 1)) { S.stats[q.team].stl++; q.st.stl++; S.stats[ps.from.team].tov++; ps.from.st.tov++; msg('抄截！'); sfx.steal(); sfx.oh(); giveBall(q, 'steal'); return; }
       }
     }
     for (const t of teams[ps.from.team]) {
@@ -1081,7 +1112,7 @@ function renderSubPanel() {
   const row = (p, onC) => {
     const queued = S.subQueue.some(([o, i]) => o === p || i === p);
     const pct = Math.round(p.sta * 100);
-    return `<button class="pl${subSel === p ? ' sel' : ''}${queued ? ' q' : ''}${p.st.pf >= 6 ? ' out' : ''}" data-n="${p.num}" data-c="${onC ? 1 : 0}"><b>#${p.num}</b> ${POS_NAMES[p.role]} <span class="bar"><i style="width:${pct}%;background:${pct > 60 ? '#5dd36b' : pct > 40 ? '#f2c14e' : '#ff5a4a'}"></i></span> <small>${p.st.pts}分 ${p.st.pf}犯</small></button>`;
+    return `<button class="pl${subSel === p ? ' sel' : ''}${queued ? ' q' : ''}${p.st.pf >= 6 ? ' out' : ''}" data-n="${p.num}" data-c="${onC ? 1 : 0}"><b>#${p.num}</b> ${POS_NAMES[p.role]} <em class="arch">${p.arch}</em> <span class="bar"><i style="width:${pct}%;background:${pct > 60 ? '#5dd36b' : pct > 40 ? '#f2c14e' : '#ff5a4a'}"></i></span> <small>${p.st.pts}分 ${p.st.pf}犯</small><i class="rt">${topRatings(p)}</i></button>`;
   };
   $('subCourt').innerHTML = teams[0].map(p => row(p, true)).join('');
   $('subBench').innerHTML = roster[0].filter(p => !p.onCourt).map(p => row(p, false)).join('');
@@ -1488,7 +1519,7 @@ function aiHandler(p, dt) {
   if (!back && S.shotClock < 2.2) { startShot(p); return p.drive; }
   if (!back && d < 2.5 && p.holdT > 0.3) { startShot(p); return p.drive; }
   if (back) { const w = toWorld(p.team, 7.5, clamp(p.pos.z * 0.5, -3, 3)); p.drive = { x: w.x, z: w.z, sprint: S.bcT > 3 || Math.random() < 0.5 }; return p.drive; }
-  if (!p.post && p.role >= 3 && d < 4.6 && p.holdT < 0.8 && Math.random() < 0.7) enterPost(p);
+  if (!p.post && p.role >= 3 && d < 4.6 && p.holdT < 0.8 && Math.random() < (p.post > 1.2 ? 0.9 : p.three > 1.1 ? 0.25 : 0.6)) enterPost(p);
   if (p.post) {
     const doubled = opp(p).filter(o => hyp(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < 2.0).length >= 2;
     if (doubled || p.holdT > p.post.dur) {
@@ -1503,7 +1534,7 @@ function aiHandler(p, dt) {
     } else { p.drive = { x: basketX(p.team) - S.attack[p.team] * 1.2, z: p.pos.z * 0.6 }; return p.drive; }
   }
   const q = shotProb(p, d, cd, three, 'jump');
-  if (three && d < 8.7 && cd > 1.25 && p.three >= 0.85 && p.holdT > 0.2 && Math.random() < 0.5) { startShot(p); return p.drive; }
+  if (three && d < 8.7 && cd > 1.25 && p.three >= 0.85 && p.holdT > 0.2 && Math.random() < 0.5 * p.three * p.three) { startShot(p); return p.drive; }
   const thr = 0.33 + (S.shotClock > 14 ? 0.04 : 0) - (S.shotClock < 7 ? 0.08 : 0) - (three && cd > 1.6 ? 0.05 : 0);
   if ((p.holdT > 0.5 || (p.holdT > 0.2 && cd > 1.7)) && d < 8.4 && cd > 1.0 && q > thr && Math.random() < 0.55) { startShot(p); return p.drive; }
   // 被貼身防守時用運球招式
@@ -1858,7 +1889,7 @@ function skipCinematic() {
 // ================= 賽前介紹 =================
 function startIntro() {
   S.phase = 'intro'; S.introT = 0; S.introCard = false;
-  const card = (t) => `<div class="lu c${t}"><h3>${TEAM_INFO[t].name}　先發</h3>` + teams[t].map(p => `<div><b>#${p.num}</b><span>${POS_NAMES[p.role]}</span><small>${p.hcm} cm</small></div>`).join('') + '</div>';
+  const card = (t) => `<div class="lu c${t}"><h3>${TEAM_INFO[t].name}　先發</h3>` + teams[t].map(p => `<div><b>#${p.num}</b><span>${POS_NAMES[p.role]}</span><small>${p.hcm} cm</small><em>${p.arch}</em></div>`).join('') + '</div>';
   $('introCard').innerHTML = card(0) + '<div class="vs">VS</div>' + card(1);
 }
 function updateIntro(dt) {
@@ -2222,8 +2253,9 @@ function updateCamera(dt) {
     return;
   }
   if (S.phase === 'timeout') { // 暫停：從記錄台後方看中場表演，兩隊在邊線圍圈
-    camera.position.lerp(new THREE.Vector3(0, 5.2, 16.5), 1 - Math.exp(-dt * 2.5));
-    camLook.lerp(new THREE.Vector3(0, 0.9, 3.2), 1 - Math.exp(-dt * 2.5)); camera.lookAt(camLook); return;
+    const up = S.showT > 2.8; // 先抬頭看大螢幕（播著場中的啦啦隊），再降下來看現場
+    camera.position.lerp(up ? new THREE.Vector3(0, 2.6, 12.5) : new THREE.Vector3(0, 5.2, 16.5), 1 - Math.exp(-dt * 2.5));
+    camLook.lerp(up ? new THREE.Vector3(0, 11.2, 0) : new THREE.Vector3(0, 0.9, 3.2), 1 - Math.exp(-dt * (up ? 4 : 1.6))); camera.lookAt(camLook); return;
   }
   if (S.phase === 'replay' && S.replay) {
     const s = S.replay.side;
@@ -2350,6 +2382,15 @@ function render(dt) {
   } else m.style.display = 'none';
   const sl = $('slabel');
   if (sl.className && ctrl) { const v = new THREE.Vector3(ctrl.pos.x, 2.6 * ctrl.scale, ctrl.pos.z).project(camera); sl.style.left = ((v.x + 1) / 2 * innerWidth) + 'px'; sl.style.top = ((1 - v.y) / 2 * innerHeight - 20) + 'px'; }
+  // 大螢幕：LED 帶顯示比分，螢幕播現場畫面（暫停時拍啦啦隊、比賽中拍持球者特寫）
+  if (S.phase !== 'title') {
+    const q = S.quarter <= 4 ? ['1ST', '2ND', '3RD', '4TH'][S.quarter - 1] : 'OT';
+    jumbo.setScore(`${TEAM_INFO[0].name} ${S.score[0]}|${q} ${fmtClock(S.clock)}|${S.score[1]} ${TEAM_INFO[1].name}`, [PALETTE[S.colors[0]].ui, PALETTE[S.colors[1]].ui]);
+  }
+  let look;
+  if (S.phase === 'timeout' || S.phase === 'break') look = { pos: new THREE.Vector3(0, 1.9, 7.0), at: new THREE.Vector3(0, 1.2, 0) };
+  else { const f = ball.holder ? ball.holder.pos : ball.pos; look = { pos: new THREE.Vector3(clamp(f.x, -11, 11) * 0.85, 2.6, f.z + 6.5), at: new THREE.Vector3(f.x, 1.3, f.z) }; }
+  jumbo.update(renderer, scene, camera, look, false);
   renderer.render(scene, camera);
 }
 function resize() { renderer.setSize(innerWidth, innerHeight); }
