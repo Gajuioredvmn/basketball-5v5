@@ -21,6 +21,7 @@ export const TEAM_INFO = [
   { name: '紅隊', color: '#c62828', dark: '#7f1010', num: '#ffffff', trim: '#ffffff' },
   { name: '藍隊', color: '#1d3f91', dark: '#0f2257', num: '#ffffff', trim: '#f2c14e' },
   { name: '裁判', color: '#8e9399', dark: '#222222', num: '#111111', trim: '#111111' },
+  { name: '', color: '#151515', dark: '#d4a017', num: '#d4a017', trim: '#d4a017' }, // 啦啦隊（黑金）
 ];
 export const PALETTE = [
   { name: '紅隊', color: '#c62828', dark: '#7f1010', num: '#ffffff', trim: '#ffffff', ui: '#c62828' },

@@ -133,7 +133,7 @@ function skinBuilder(bones) {
   };
 }
 
-export function makePlayerMesh(team, idx, number, scale, skinIdx) {
+export function makePlayerMesh(team, idx, number, scale, skinIdx, opts = {}) {
   const t = TEAM_INFO[team];
   const skinCol = SKINS[skinIdx % SKINS.length];
   const style = skinIdx % 6; // 0 短髮 1 寸頭 2 爆炸頭 3 辮子 4 短髮+頭帶 5 髒辮
@@ -142,9 +142,9 @@ export function makePlayerMesh(team, idx, number, scale, skinIdx) {
     jersey: new THREE.MeshStandardMaterial({ map: jerseyTexture(team, number), roughness: 0.66 }),
     shorts: new THREE.MeshStandardMaterial({ map: shortsTexture(team), roughness: 0.7, side: THREE.DoubleSide }),
   };
-  const face = new THREE.MeshStandardMaterial({ map: faceTexture(skinCol, skinIdx, style), roughness: 0.52 });
+  const face = new THREE.MeshStandardMaterial({ map: faceTexture(skinCol, opts.long ? 1 : skinIdx, opts.long ? 0 : style), roughness: 0.52 });
   const hairCol = skinIdx % 7 === 4 ? '#4a2e18' : '#120c08';
-  const shoeCol = team === 0 ? '#f2f2f2' : '#121212', soleCol = team === 1 ? '#f2c14e' : '#ffffff', sockCol = team === 1 ? '#111111' : '#ffffff';
+  const shoeCol = team === 3 ? '#f2f2f2' : team === 0 ? '#f2f2f2' : '#121212', soleCol = team === 1 ? '#f2c14e' : '#ffffff', sockCol = team === 1 ? '#111111' : '#ffffff';
   const accent = team === 0 ? '#c62828' : (team === 1 ? '#f2c14e' : '#888888');
   const sleeve = team < 2 && skinIdx % 4 === 1, sleeveCol = team === 1 ? '#111111' : '#ffffff';
 
@@ -205,7 +205,12 @@ export function makePlayerMesh(team, idx, number, scale, skinIdx) {
     [geo('ear', () => new THREE.SphereGeometry(0.024, 8, 6)), skinCol, 0.095, -0.005, -0.005, 0.5, 1, 0.8],
     [geo('ear', () => null), skinCol, -0.095, -0.005, -0.005, 0.5, 1, 0.8],
   ];
-  if (style === 0 || style === 4) hp.push([geo('hair', () => new THREE.SphereGeometry(0.114, 18, 8, 0, Math.PI * 2, 0, Math.PI * 0.45)), hairCol, 0, 0.018, -0.008, 0.92, 1.0, 1.03]);
+  if (opts.long) { // 長髮綁馬尾
+    hp.push([geo('hairL', () => new THREE.SphereGeometry(0.118, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.55)), hairCol, 0, 0.012, -0.012, 0.95, 1.02, 1.06]);
+    hp.push([geo('pony', () => new THREE.CapsuleGeometry(0.035, 0.2, 4, 8)), hairCol, 0, -0.03, -0.12, 1, 1, 1, -0.35]);
+    hp.push([geo('tie', () => new THREE.TorusGeometry(0.03, 0.01, 6, 12)), '#ffd23a', 0, 0.06, -0.1, 1, 1, 1, 1.2]);
+  }
+  else if (style === 0 || style === 4) hp.push([geo('hair', () => new THREE.SphereGeometry(0.114, 18, 8, 0, Math.PI * 2, 0, Math.PI * 0.45)), hairCol, 0, 0.018, -0.008, 0.92, 1.0, 1.03]);
   else if (style === 1) hp.push([geo('buzz', () => new THREE.SphereGeometry(0.111, 18, 8, 0, Math.PI * 2, 0, Math.PI * 0.42)), hairCol, 0, 0.01, -0.004, 0.9, 1.06, 1.0]);
   else if (style === 2) hp.push([geo('afro', () => new THREE.SphereGeometry(0.135, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55)), hairCol, 0, 0.03, -0.015, 0.95, 0.95, 1.02]);
   else if (style === 3) { for (let k = -3; k <= 3; k++) hp.push([geo('braid', () => new THREE.CapsuleGeometry(0.011, 0.17, 3, 6)), hairCol, k * 0.022, 0.055, -0.02, 1, 1, 1, 1.25 + Math.abs(k) * 0.02, 0, k * 0.12]); }
@@ -215,6 +220,27 @@ export function makePlayerMesh(team, idx, number, scale, skinIdx) {
   }
   if (style === 4 && team < 2) hp.push([geo('band', () => new THREE.TorusGeometry(0.103, 0.014, 6, 22)), sleeveCol, 0, 0.045, 0, 1, 1, 1, Math.PI / 2]);
   headG.add(merged(hp));
+  if (opts.pom) for (const a of arms) { // 彩球
+    const pm = new THREE.Mesh(geo('pom', () => new THREE.IcosahedronGeometry(0.11, 1)), new THREE.MeshStandardMaterial({ color: opts.pom, roughness: 0.35, metalness: 0.5, flatShading: true }));
+    pm.position.set(0, -0.33, 0.01); a.el.add(pm);
+  }
+  if (opts.mascot) { // 吉祥物：原創的大頭熊，頭套蓋住原本的頭
+    headG.children.forEach(c => { c.visible = false; });
+    const fur = new THREE.MeshStandardMaterial({ color: opts.mascot, roughness: 0.95 }), light = new THREE.MeshStandardMaterial({ color: '#e9d2a8', roughness: 0.9 });
+    const black = new THREE.MeshStandardMaterial({ color: '#141010', roughness: 0.4 }), white = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.4 });
+    const hd = new THREE.Group(); hd.position.y = 0.06; headG.add(hd);
+    const add = (g, m, x, y, z, sx = 1, sy = 1, sz = 1) => { const o = new THREE.Mesh(g, m); o.position.set(x, y, z); o.scale.set(sx, sy, sz); hd.add(o); return o; };
+    add(new THREE.SphereGeometry(0.26, 24, 18), fur, 0, 0, 0, 1, 0.95, 0.95);
+    add(new THREE.SphereGeometry(0.11, 16, 10), light, 0, -0.07, 0.2, 1.1, 0.8, 0.8);
+    add(new THREE.SphereGeometry(0.035, 12, 8), black, 0, -0.03, 0.29);
+    for (const sd of [-1, 1]) {
+      add(new THREE.SphereGeometry(0.085, 14, 10), fur, sd * 0.19, 0.19, -0.02, 1, 1, 0.55);
+      add(new THREE.SphereGeometry(0.05, 12, 8), light, sd * 0.19, 0.19, 0.02, 1, 1, 0.4);
+      add(new THREE.SphereGeometry(0.045, 12, 8), white, sd * 0.085, 0.06, 0.215, 1, 1.2, 0.6);
+      add(new THREE.SphereGeometry(0.022, 10, 6), black, sd * 0.085, 0.06, 0.24);
+    }
+    const smile = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.008, 6, 16, Math.PI), black); smile.position.set(0, -0.11, 0.255); smile.rotation.z = Math.PI; hd.add(smile);
+  }
 
   root.scale.setScalar(scale);
   const r = { root, body, hips, torso, headG, legL: legs[0], legR: legs[1], armL: arms[0], armR: arms[1], mats };
@@ -346,6 +372,20 @@ export function animatePlayer(p, dt) {
   } else if (mode === 'cheer') { // 板凳起立揮手
     const w = Math.sin(performance.now() * 0.015 + p.runPhase);
     P.shRx = -2.9 + w * 0.3; P.shLx = -2.9 - w * 0.3; P.elR = P.elL = -0.3; P.shRz = -0.2; P.shLz = 0.2; P.kneeL = P.kneeR = 0.15;
+  } else if (mode === 'dance') { // 啦啦隊舞步：每兩拍換一個動作，全隊同步
+    const bt = (p.danceT || 0) * 2.2, beat = Math.floor(bt), f = bt - beat, mv = Math.floor(beat / 2) % 6, sw = Math.sin(bt * Math.PI);
+    if (mv === 0) { P.shRx = P.shLx = -2.6; P.shRz = -0.6 - sw * 0.2; P.shLz = 0.6 + sw * 0.2; P.elR = P.elL = -0.1; P.kneeL = 0.2 + Math.max(0, sw) * 0.4; P.kneeR = 0.2 + Math.max(0, -sw) * 0.4; } // 高舉 V 字
+    else if (mv === 1) { const s2 = beat % 2 ? 1 : -1; P.shRx = s2 > 0 ? -3.0 : -0.3; P.shLx = s2 > 0 ? -0.3 : -3.0; P.elR = P.elL = -0.1; P.hipLz = s2 * 0.15; P.hipRz = s2 * 0.15; P.lean = 0.05; } // 左右交替出拳
+    else if (mv === 2) { const s2 = beat % 2 ? 1 : -1; P.hipL = s2 > 0 ? -1.5 * Math.sin(f * Math.PI) : 0; P.hipR = s2 < 0 ? -1.5 * Math.sin(f * Math.PI) : 0; P.kneeL = P.kneeR = 0.05; P.shRx = P.shLx = -1.5; P.shRz = -1.4; P.shLz = 1.4; P.elR = P.elL = 0; } // 踢腿
+    else if (mv === 3) { P.shRx = P.shLx = -1.6 + sw * 0.4; P.shRz = -0.3; P.shLz = 0.3; P.elR = P.elL = -1.6; P.kneeL = P.kneeR = 0.5 + Math.abs(sw) * 0.3; P.lean = 0.2; P.bodyY = -0.08 - Math.abs(sw) * 0.06; } // 下蹲搖彩球
+    else if (mv === 4) { P.shRx = -2.8; P.shLx = -2.8; P.shRz = -0.2 - sw * 0.5; P.shLz = 0.2 - sw * 0.5; P.elR = P.elL = -0.2; P.hipLz = sw * 0.2; P.hipRz = sw * 0.2; } // 舉手搖擺
+    else { P.shRx = -1.2; P.shLx = -1.2; P.shRz = -1.5 + sw * 0.6; P.shLz = 1.5 - sw * 0.6; P.elR = P.elL = -0.2; P.kneeL = P.kneeR = 0.3; } // 轉圈張手
+  } else if (mode === 'wave') { // 揮手（吉祥物）
+    const w = Math.sin(performance.now() * 0.012 + p.runPhase);
+    P.shRx = -2.7; P.shRz = -0.4 + w * 0.35; P.elR = -0.4; P.shLx = -0.3; P.shLz = 0.5; P.elL = -0.6;
+  } else if (mode === 'boxout') { // 卡位：重心壓低、腳張開、雙臂往兩側撐開把人擋在身後
+    P.hipL = -0.55; P.hipR = -0.55; P.kneeL = 0.95; P.kneeR = 0.95; P.hipLz = 0.22; P.hipRz = -0.22; P.lean = 0.32; P.bodyY = -0.12;
+    P.shLx = -0.75; P.shRx = -0.75; P.shLz = 1.25; P.shRz = -1.25; P.elL = -1.25; P.elR = -1.25; P.head = -0.25;
   } else if (mode === 'clutch') { // 拉桿：先把球收到腰間，再從另一側往上送
     const t = p.clutch ? p.clutch.t : 0, up = t > 0.12;
     P.shRx = P.shLx = up ? -2.7 : -0.7; P.elR = P.elL = up ? -0.3 : -1.3; P.shRz = up ? 0.5 * (p.hand || 1) : 0.3; P.shLz = up ? 0.5 * (p.hand || 1) : -0.3;

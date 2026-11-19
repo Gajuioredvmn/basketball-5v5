@@ -116,6 +116,11 @@ td.t0{color:#ff6b5e;font-weight:800}td.t1{color:#7aa7ff;font-weight:800}
 .note{font-size:11px;opacity:.65;margin:4px 0}
 .tabs{display:flex;gap:6px;justify-content:center;margin-bottom:6px}
 .tabs button{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:999px;padding:5px 14px;font-size:13px}
+body.tshow #pad,body.tshow .btn,body.tshow #tbtn,body.tshow #tac{visibility:hidden}
+.heat{display:flex;gap:14px;align-items:center;justify-content:center}
+.heat canvas{height:min(36vh,150px);width:auto;border-radius:8px}
+table.hz th{text-align:left;padding-right:10px}table.hz td{padding:2px 8px}
+.hchips{flex-wrap:wrap;gap:4px}.hchips button{padding:3px 9px;font-size:12px}.hchips .sep{width:10px}
 .tabs button.on{background:#ff8a1f;border-color:#ff8a1f;color:#1a0d00;font-weight:700}
 .box{max-height:46vh;overflow:auto}
 table.ps{font-size:12px}table.ps td,table.ps th{padding:3px 7px}
@@ -213,7 +218,7 @@ body.tiphint #b1{animation:pulse 0.8s infinite}
 <div id="title" class="ov show">
   <h1>全場 <span>5v5</span> 籃球</h1>
   <p class="sub">NBA 規格場地</p>
-  <div class="opt" data-k="m"><label>模式</label><button data-v="game" class="on">單場比賽</button><button data-v="series">季後賽搶四</button><button data-v="three">三分大賽</button><button data-v="dunk">灌籃大賽</button></div>
+  <div class="opt" data-k="m"><label>模式</label><button data-v="game" class="on">單場比賽</button><button data-v="series">季後賽搶四</button><button data-v="three">三分大賽</button><button data-v="dunk">灌籃大賽</button><button data-v="practice">練習</button><button data-v="tutorial">教學</button></div>
   <div class="opt" data-k="c0"><label>我的球隊</label></div>
   <div class="opt" data-k="c1"><label>對手</label></div>
   <div class="opt" data-k="q"><label>每節</label><button data-v="2">2 分鐘</button><button data-v="3" class="on">3 分鐘</button><button data-v="5">5 分鐘</button></div>

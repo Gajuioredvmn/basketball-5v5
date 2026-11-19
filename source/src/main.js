@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { HX, HZ, RIM_H, RIM_R, BALL_R, BASKET_X, BOARD_X, BOARD_BOTTOM, BOARD_W, BOARD_H, THREE_R, THREE_SIDE, KEY_HALF, FT_X, G, TEAM_INFO, POS_NAMES, PALETTE } from './const.js';
+import { HX, HZ, RIM_H, RIM_R, BALL_R, BASKET_X, BOARD_X, BOARD_BOTTOM, BOARD_W, BOARD_H, THREE_R, THREE_SIDE, KEY_HALF, FT_X, CIRCLE_R, RA_R, G, TEAM_INFO, POS_NAMES, PALETTE } from './const.js';
 import { buildArena, updateShotClockDisplays } from './arena.js';
 import { makePlayerMesh, makeReflection, animatePlayer, handWorld, jerseyTexture, shortsTexture } from './player.js';
 import { initAudio, sfx, setMuted } from './audio.js';
+import { createExtras } from './extras.js';
 
 const params = new URLSearchParams(location.search);
 const store = { get(k, d) { try { const v = localStorage.getItem('bb5v5.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('bb5v5.' + k, JSON.stringify(v)); } catch (e) { } } };
@@ -88,6 +89,8 @@ function rebuildLists() {
   players = [...teams[0], ...teams[1]];
 }
 const refRig = makePlayerMesh(2, 0, 12, 0.98, 6); scene.add(refRig.root);
+const extras = createExtras(scene, { dancers: SET.quality !== 'low' });
+for (const a of extras.list) a.shadow = makeShadow(0.8);
 const referee = { rig: refRig, refl: makeReflection(refRig, scene), pos: new THREE.Vector3(0, 0, -HZ - 0.7), vel: new THREE.Vector3(), facing: 0, jy: 0, runPhase: 0, pose: 'run', scale: 0.98, landT: 0, dribblePh: 0, shadow: makeShadow(0.9) };
 
 // ================= 遊戲狀態 =================
@@ -125,7 +128,7 @@ function say(text, pri = 1) {
   if ($('title').classList.contains('show')) return;
   if (VOICE.busy && pri < VOICE.pri) return;
   const t = speakText(text);
-  const el = $('sub'); el.textContent = t; el.className = 'show'; clearTimeout(say.t); say.t = setTimeout(() => el.className = '', Math.max(1800, t.length * 230));
+  const el = $('sub'); el.textContent = t; el.className = 'show'; clearTimeout(say.t); say.t = setTimeout(() => { if (S.tut && S.tut.text) el.textContent = S.tut.text; else el.className = ''; }, Math.max(1800, t.length * 230));
   if (!SET.voice || muted || !('speechSynthesis' in window)) return;
   try {
     if (VOICE.busy) speechSynthesis.cancel();
@@ -295,6 +298,7 @@ function giveBall(p, how) {
   const changed = p.team !== S.poss, wasShot = ball.state === 'shot' || ball.missed;
   if (wasShot && how === 'rebound' && p.team === 1 && ball.lastTeam === 0 && S.phase === 'live') sfx.groan();
   const passer = ball.pass ? ball.pass.from : null;
+  if (wasShot && how === 'rebound' && S.phase === 'live') { if (p.team === ball.lastTeam) { S.stats[p.team].oreb = (S.stats[p.team].oreb || 0) + 1; if (Math.random() < 0.6) say(pick(['進攻籃板！', '搶下進攻籃板，二次進攻！', `${p.num}號 搶到進攻籃板`]), 1); } else if (p.boxing && Math.random() < 0.3) say(pick(['卡位漂亮，籃板到手', '防守籃板']), 1); }
   ball.state = 'held'; ball.holder = p; ball.shot = null; ball.pass = null; ball.lastTeam = p.team; ball.vel.set(0, 0, 0);
   p.holdT = 0; p.decT = rand(0.2, 0.4); p.dribblePh = 0;
   if (how === 'rebound' || (wasShot && how !== 'pass')) {
@@ -376,7 +380,7 @@ function startShot(p) {
     return;
   }
   if (d < 2.4 || (d < 3.6 && movingToward && hyp(p.vel.x, p.vel.z) > 3)) {
-    const dunk = p.dunk && d < 3.0 && p.sta > 0.3 && (isUser(p) ? (inp.sprintHeld || p.role >= 3) : (cd > 0.9 && Math.random() < 0.65));
+    const dunk = p.dunk && d < 3.0 && p.sta > 0.3 && (isUser(p) ? (inp.sprintHeld || p.role >= 3) : (cd > 1.2 && d < 2.6 && Math.random() < 0.5));
     startLayup(p, dunk);
   } else {
     p.action = 'shoot'; p.actT = 0; p.released = false; p.vel.set(0, 0, 0); p.shotKind = 'jump';
@@ -398,7 +402,7 @@ function startLayup(p, dunk) {
   p.reverse = false;
   if (!dunk && isUser(p) && inp.mag > 0.5 && Math.abs(p.pos.x) > HX - 3.2 && Math.sign(inp.z) === -Math.sign(p.pos.z) && Math.abs(p.pos.z) > 0.6) {
     // 反手上籃：從籃框下穿到另一側，用籃框擋住防守者
-    p.reverse = true; tgt = new THREE.Vector3(bx - S.attack[p.team] * 0.75, 0, -Math.sign(p.pos.z) * 0.85);
+    p.reverse = true; tutEv('reverse'); tgt = new THREE.Vector3(bx - S.attack[p.team] * 0.75, 0, -Math.sign(p.pos.z) * 0.85);
     setTimeout(() => say('反手上籃！', 1), 300);
   }
   const v = dunk ? 5.0 : 3.9; const tApex = v / G;
@@ -432,7 +436,7 @@ function releaseShot(p, timing) {
     if (timing != null) {
       const win = p.win || 0.07, err = timing - 0.91; p.timingErr = err;
       if (Math.abs(err) <= win) { // 甜蜜點：空檔幾乎必進，被貼身才可能不進
-        p.shotGrade = 'perfect'; prob = cd < 0.9 ? 0.72 : cd < 1.5 ? 0.88 : 0.97; if (d > 8.6) prob *= 0.8; meterFlash('perfect');
+        p.shotGrade = 'perfect'; tutEv('perfect'); prob = cd < 0.9 ? 0.72 : cd < 1.5 ? 0.88 : 0.97; if (d > 8.6) prob *= 0.8; meterFlash('perfect');
       } else if (Math.abs(err) <= win * 2.3) { p.shotGrade = 'good'; prob += 0.05; meterFlash('good'); }
       else { p.shotGrade = 'bad'; prob *= 0.45; meterFlash('bad'); }
     } else { p.shotGrade = null; p.timingErr = 0; prob += (D().ai - 1) * 0.6 + rand(-0.03, 0.03); }
@@ -471,6 +475,7 @@ function releaseShot(p, timing) {
     else tgt.add(new THREE.Vector3(-toShooter.z, 0, toShooter.x).multiplyScalar(m * (Math.random() < 0.5 ? 1 : -1)));
   }
   S.stats[p.team].fga++; p.st.fga++; if (three) { S.stats[p.team].tpa++; p.st.tpa++; }
+  ball.hRec = { team: p.team, num: p.num, dep: HX - p.pos.x * S.attack[p.team], v: p.pos.z * S.attack[p.team], three, made: false }; (S.shots = S.shots || []).push(ball.hRec);
   ball.state = 'shot'; ball.holder = null; ball.lastTeam = p.team; ball.rimTouched = false; ball.missed = false;
   ball.shot = { team: p.team, shooter: p, three, t: 0, tried: new Set(), kind, buzzer: S.clock < 1.2 };
   p.clutchShot = !!p.clutch;
@@ -515,7 +520,7 @@ function doPass(p, to, speed = 12.5) {
   if (!to) return;
   const scr = S.screen[to.team];
   const rolling = to.cutting > 0 || (scr && scr.screener === to && scr.stage === 'roll');
-  if (S.phase === 'live' && to.dunk && to.sta > 0.3 && rolling && distB(to) < 4.4 && distB(p) > 3.5 && nearestOpp(to)[1] > 0.8 && !to.jy) return lobPass(p, to);
+  if (S.phase === 'live' && to.dunk && to.sta > 0.3 && rolling && distB(to) < 4.4 && distB(p) > 3.5 && nearestOpp(to)[1] > 1.2 && !to.jy && (isUser(p) ? inp.sprintHeld : Math.random() < 0.2)) return lobPass(p, to);
   const from = handBall(p); from.y = Math.max(from.y, 1.15 * p.scale);
   let tgt = chest(to); const d = from.distanceTo(tgt);
   let T = clamp(d / speed, 0.15, 1.3);
@@ -606,6 +611,7 @@ function doMove(p, kind, side) {
   else if (kind === 'hesi') { p.moveT = p.moveDur = 0.55; p.moveB = B.clone(); p.moveVel.copy(B).multiplyScalar(0.8); p.moveKind = 'hesi'; if (isUser(p)) showShotLabel('猶豫步', true); }
   else if (kind === 'spin') { if (isUser(p)) showShotLabel('轉身', true); p.moveT = p.moveDur = 0.45; p.moveVel.copy(L).multiplyScalar(side * 3.4).addScaledVector(B, 3.0); p.moveKind = 'spin'; p.spinDir = side; }
   else { if (isUser(p)) showShotLabel('後撤步', true); p.moveT = p.moveDur = 0.32; p.moveVel.copy(B).multiplyScalar(-4.2); p.moveKind = 'stepback'; p.openT = 0.9; if (S.fc && Math.abs(p.pos.x) < 2.2) p.moveVel.multiplyScalar(0.2); }
+  if (isUser(p)) tutEv('move');
   const g = guardOf(p);
   if (g && hyp(g.pos.x - p.pos.x, g.pos.z - p.pos.z) < 1.9) {
     const ch = 0.34 * p.handle / g.def * (kind === 'stepback' ? 0.6 : (kind === 'hesi' ? 0.8 : 1)) * (isUser(g) ? 0.8 : 1);
@@ -844,7 +850,7 @@ function tryGrab() {
     if (p.noGrabT > 0 || p.action === 'shoot' || p.action === 'layup' || p.action === 'dunk' || p.action === 'hang') continue;
     const d = hyp(p.pos.x - ball.pos.x, p.pos.z - ball.pos.z);
     const top = 2.45 * p.scale + p.jy + (p.pose === 'rebound' || p.pose === 'block' ? 0.15 : 0);
-    if (d < 0.55 * p.scale && ball.pos.y < top && ball.pos.y > 0.05) { const sc = d - p.reb * 0.15 + rand(0, 0.12); if (sc < bd) { bd = sc; best = p; } }
+    if (d < 0.55 * p.scale && ball.pos.y < top && ball.pos.y > 0.05) { const sc = d - p.reb * 0.15 + rand(0, 0.12) - (p.boxing ? 0.08 : 0) + (p.boxedT > 0 ? 0.1 : 0); if (sc < bd) { bd = sc; best = p; } }
   }
   if (best) { if (S.phase !== 'live' && S.phase !== 'tipoff') return; giveBall(best, (ball.state === 'shot' || ball.missed) ? 'rebound' : 'loose'); }
 }
@@ -858,6 +864,7 @@ function scored(s) {
   if (ball.state === 'dead' || ball.state === 'held') return;
   if (S.phase === 'contest3') return contest3Scored();
   if (S.phase === 'contestD') return contestDScored();
+  if (S.phase === 'practice') return practiceScored();
   if (S.phase !== 'live' && S.phase !== 'ft') return;
   const team = S.attack[0] === s ? 0 : 1;
   const sh = ball.shot;
@@ -878,10 +885,12 @@ function celebrate(team, shooter, big) {
   for (const q of teams[team]) if (q !== shooter && shooter && hyp(q.pos.x - shooter.pos.x, q.pos.z - shooter.pos.z) < 6) { q.celebT = 1.0; q.celebType = 3; }
   for (const q of teams[1 - team]) if (shooter && hyp(q.pos.x - shooter.pos.x, q.pos.z - shooter.pos.z) < 3.5) q.dejT = 1.3;
   if (big) for (const q of roster[team]) if (!q.onCourt) q.cheerT = 2.4;
+  if (team === 0) extras.cheer(big); // 主場啦啦隊、吉祥物跟著歡呼
 }
 function creditBasket(team, shooter, pts, s) {
   if (ball.shotRec) ball.shotRec.res = 'in';
   const sh = ball.shot;
+  if (ball.hRec && sh && sh.kind !== 'ft') ball.hRec.made = true;
   S.score[team] += pts;
   if (shooter) {
     S.stats[team].fgm++; shooter.st.fgm++; shooter.st.pts += pts; if (pts === 3) { S.stats[team].tpm++; shooter.st.tpm++; }
@@ -1037,10 +1046,26 @@ function callTimeout(team) {
   ball.state = 'dead'; ball.holder = null;
   S.phase = 'timeout'; S.runClock = false;
   for (const p of [...roster[0], ...roster[1]]) p.sta = Math.min(1, p.sta + 0.12);
-  openSubPanel(true);
+  // 球員走回各自板凳前圍成一圈；啦啦隊進場表演，幾秒後（或點畫面）才跳出換人面板
+  for (const t of [0, 1]) teams[t].forEach((p, i) => { const a = i / 5 * Math.PI * 2; p.huddle = new THREE.Vector3((t === 0 ? -1 : 1) * 6.2 + Math.cos(a) * 0.85, 0, HZ + 1.15 + Math.sin(a) * 0.6); });
+  S.showT = AUTO ? 0 : 4.5;
+  document.body.classList.toggle('tshow', S.showT > 0);
+  if (S.showT <= 0) openSubPanel(true);
 }
+function updateHuddle(dt) {
+  if (S.showT > 0) { S.showT -= dt; if (S.showT <= 0) { openSubPanel(true); document.body.classList.remove('tshow'); } }
+  for (const p of players) {
+    if (!p.huddle) continue;
+    const dx = p.huddle.x - p.pos.x, dz = p.huddle.z - p.pos.z, d = hyp(dx, dz);
+    if (d > 0.15) { const v = Math.min(3.0, d * 2); p.vel.set(dx / d * v, 0, dz / d * v); p.pos.addScaledVector(p.vel, dt); p.facing = Math.atan2(dx, dz); p.pose = 'run'; }
+    else { p.vel.set(0, 0, 0); const c = (p.team === 0 ? -1 : 1) * 6.2; p.facing = Math.atan2(c - p.pos.x, HZ + 1.15 - p.pos.z); p.pose = 'idle'; }
+    p.jy = 0; p.jv = 0; p.action = null;
+  }
+}
+addEventListener('pointerdown', () => { if (S.phase === 'timeout' && S.showT > 0) { S.showT = 0; openSubPanel(true); document.body.classList.remove('tshow'); } }, true);
 function endTimeout() {
-  $('subp').classList.remove('show');
+  $('subp').classList.remove('show'); S.showT = 0;
+  for (const p of [...roster[0], ...roster[1]]) p.huddle = null;
   autoSubs();
   const r = S.toResume; S.toResume = null;
   if (r && r.ft) startFT(r.shooter, r.n, r.keep); else if (r === 'end') endQuarter(); else startInbound(r || { team: S.poss, kind: 'side', x: 0, z: -(HZ + 0.45) });
@@ -1173,13 +1198,60 @@ function renderBox() {
   const team = `<table class="tm"><tr><td class="t0">${TEAM_INFO[0].name}</td><th></th><td class="t1">${TEAM_INFO[1].name}</td></tr>` +
     r('投籃', t => `${st[t].fgm}/${st[t].fga} ${pct(st[t].fgm, st[t].fga)}`) + r('三分', t => `${st[t].tpm}/${st[t].tpa}`) + r('罰球', t => `${st[t].ftm}/${st[t].fta}`) +
     r('籃板', t => st[t].reb) + r('抄截', t => st[t].stl) + r('火鍋', t => st[t].blk) + r('失誤', t => st[t].tov) + r('犯規', t => st[t].pf) + '</table>';
-  const ps = roster[boxTab].map(p => `<tr><td>#${p.num}</td><td>${POS_NAMES[p.role]}</td><td>${Math.round(p.st.sec / 60 * 12 * 60 / S.qlen)}</td><td><b>${p.st.pts}</b></td><td>${p.st.reb}</td><td>${p.st.ast}</td><td>${p.st.stl}</td><td>${p.st.blk}</td><td>${p.st.fgm}/${p.st.fga}</td><td>${p.st.tpm}/${p.st.tpa}</td><td>${p.st.ftm}/${p.st.fta}</td><td>${p.st.pf}</td></tr>`).join('');
-  $('brkStats').innerHTML = `<div class="tabs"><button data-t="2" class="${boxTab === 2 ? 'on' : ''}">全隊</button><button data-t="0" class="${boxTab === 0 ? 'on' : ''}">${TEAM_INFO[0].name}</button><button data-t="1" class="${boxTab === 1 ? 'on' : ''}">${TEAM_INFO[1].name}</button></div>` +
+  const ps = boxTab > 1 ? '' : roster[boxTab].map(p => `<tr><td>#${p.num}</td><td>${POS_NAMES[p.role]}</td><td>${Math.round(p.st.sec / 60 * 12 * 60 / S.qlen)}</td><td><b>${p.st.pts}</b></td><td>${p.st.reb}</td><td>${p.st.ast}</td><td>${p.st.stl}</td><td>${p.st.blk}</td><td>${p.st.fgm}/${p.st.fga}</td><td>${p.st.tpm}/${p.st.tpa}</td><td>${p.st.ftm}/${p.st.fta}</td><td>${p.st.pf}</td></tr>`).join('');
+  const tabs = `<div class="tabs"><button data-t="2" class="${boxTab === 2 ? 'on' : ''}">全隊</button><button data-t="0" class="${boxTab === 0 ? 'on' : ''}">${TEAM_INFO[0].name}</button><button data-t="1" class="${boxTab === 1 ? 'on' : ''}">${TEAM_INFO[1].name}</button><button data-t="3" class="${boxTab === 3 ? 'on' : ''}">投籃熱區</button></div>`;
+  if (boxTab === 3) { renderHeat(tabs); return; }
+  $('brkStats').innerHTML = tabs +
     (boxTab === 2 ? team : `<div class="scrollable box"><table class="ps"><tr><th>背號</th><th>位置</th><th>上場</th><th>得分</th><th>籃板</th><th>助攻</th><th>抄截</th><th>火鍋</th><th>投籃</th><th>三分</th><th>罰球</th><th>犯規</th></tr>${ps}</table></div><div class="note">上場時間換算成 12 分鐘一節</div>`);
 }
-$('brkStats').addEventListener('click', e => { const b = e.target.closest('button[data-t]'); if (b) { boxTab = +b.dataset.t; renderBox(); } });
+$('brkStats').addEventListener('click', e => {
+  const b = e.target.closest('button[data-t]'); if (b) { boxTab = +b.dataset.t; renderBox(); return; }
+  const h = e.target.closest('button[data-ht]'); if (h) { heatSel.team = +h.dataset.ht; heatSel.num = null; renderBox(); return; }
+  const n = e.target.closest('button[data-hn]'); if (n) { heatSel.num = n.dataset.hn === '' ? null : +n.dataset.hn; renderBox(); }
+});
+// ---- 投籃熱區圖：半場、三個區域依命中率上色，進球實心點、沒進叉叉 ----
+const heatSel = { team: 0, num: null };
+function heatZone(r) { if (r.three) return 2; return (Math.abs(r.v) < KEY_HALF && r.dep < 5.79) ? 0 : 1; }
+function renderHeat(tabs) {
+  const all = (S.shots || []).filter(r => r.team === heatSel.team);
+  const list = heatSel.num == null ? all : all.filter(r => r.num === heatSel.num);
+  const nums = [...new Set(all.map(r => r.num))].sort((a, b) => a - b);
+  const z = [0, 1, 2].map(i => { const a = list.filter(r => heatZone(r) === i); return [a.filter(r => r.made).length, a.length]; });
+  const pct = ([m, a]) => a ? Math.round(m / a * 100) + '%' : '-';
+  const chips = `<div class="tabs hchips"><button data-ht="0" class="${heatSel.team === 0 ? 'on' : ''}">${TEAM_INFO[0].name}</button><button data-ht="1" class="${heatSel.team === 1 ? 'on' : ''}">${TEAM_INFO[1].name}</button><span class="sep"></span><button data-hn="" class="${heatSel.num == null ? 'on' : ''}">全隊</button>${nums.map(n => `<button data-hn="${n}" class="${heatSel.num === n ? 'on' : ''}">#${n}</button>`).join('')}</div>`;
+  $('brkStats').innerHTML = tabs + chips + `<div class="heat"><canvas id="heatC" width="400" height="300"></canvas><table class="tm hz"><tr><th>禁區</th><td>${z[0][0]}/${z[0][1]}</td><td>${pct(z[0])}</td></tr><tr><th>中距離</th><td>${z[1][0]}/${z[1][1]}</td><td>${pct(z[1])}</td></tr><tr><th>三分</th><td>${z[2][0]}/${z[2][1]}</td><td>${pct(z[2])}</td></tr></table></div><div class="note">紅色＝手感熱（命中率高）、藍色＝手感冷；● 進球　✕ 沒進</div>`;
+  const c = $('heatC'), g = c.getContext('2d');
+  const W = c.width, H = c.height, k = Math.min(W / (2 * HZ), H / HX);
+  const X = v => W / 2 + v * k, Y = dep => dep * k; // 底線在上方
+  const bD = HX - BASKET_X;
+  const heatCol = ([m, a]) => { if (!a) return 'rgba(255,255,255,0.05)'; const f = m / a; return f >= 0.5 ? 'rgba(230,70,40,0.55)' : f >= 0.4 ? 'rgba(240,170,40,0.45)' : f >= 0.3 ? 'rgba(150,150,160,0.35)' : 'rgba(50,110,230,0.5)'; };
+  g.fillStyle = '#2a2018'; g.fillRect(0, 0, W, H);
+  const arcPath = () => { const a0 = Math.acos(THREE_SIDE / THREE_R); g.beginPath(); g.moveTo(X(-THREE_SIDE), 0); g.lineTo(X(-THREE_SIDE), Y(bD + Math.sin(a0) * THREE_R)); g.arc(X(0), Y(bD), THREE_R * k, Math.PI - a0, a0, true); g.lineTo(X(THREE_SIDE), 0); g.closePath(); };
+  g.fillStyle = heatCol(z[2]); g.fillRect(0, 0, W, Y(HX));
+  arcPath(); g.fillStyle = '#2a2018'; g.fill(); g.fillStyle = heatCol(z[1]); g.fill();
+  g.fillStyle = '#2a2018'; g.fillRect(X(-KEY_HALF), 0, KEY_HALF * 2 * k, 5.79 * k); g.fillStyle = heatCol(z[0]); g.fillRect(X(-KEY_HALF), 0, KEY_HALF * 2 * k, 5.79 * k);
+  g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = 1.5;
+  g.strokeRect(1, 1, W - 2, Y(HX) - 2); arcPath(); g.stroke();
+  g.strokeRect(X(-KEY_HALF), 0, KEY_HALF * 2 * k, 5.79 * k);
+  g.beginPath(); g.arc(X(0), Y(5.79), CIRCLE_R * k, 0, Math.PI); g.stroke();
+  g.beginPath(); g.arc(X(0), Y(bD), RA_R * k, 0, Math.PI); g.stroke();
+  g.beginPath(); g.arc(X(0), Y(HX), CIRCLE_R * k, Math.PI, 0); g.stroke();
+  g.strokeStyle = '#ff7a1a'; g.lineWidth = 2; g.beginPath(); g.arc(X(0), Y(bD), RIM_R * k, 0, Math.PI * 2); g.stroke();
+  g.strokeStyle = '#fff'; g.beginPath(); g.moveTo(X(-0.915), Y(HX - BOARD_X)); g.lineTo(X(0.915), Y(HX - BOARD_X)); g.stroke();
+  for (const r of list) {
+    // 起跳後身體會飄，點畫在三分線附近時依實際判定推到線的正確那一側
+    let v = r.v, dp = r.dep; const rd = hyp(v, dp - bD), corner = Math.abs(v) >= THREE_SIDE - 0.05 && dp < bD + 2.6;
+    if (r.three && !corner && rd < THREE_R + 0.18) { const k2 = (THREE_R + 0.18) / (rd || 1); v *= k2; dp = bD + (dp - bD) * k2; }
+    if (!r.three && rd > THREE_R - 0.18) { const k2 = (THREE_R - 0.18) / rd; v *= k2; dp = bD + (dp - bD) * k2; }
+    if (!r.three && Math.abs(v) > THREE_SIDE - 0.18) v = Math.sign(v) * (THREE_SIDE - 0.18);
+    const x = X(clamp(v, -HZ + 0.2, HZ - 0.2)), y = Y(clamp(dp, 0.2, HX - 0.2));
+    if (r.made) { g.fillStyle = '#ffd23a'; g.strokeStyle = '#3a2400'; g.lineWidth = 1; g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); g.stroke(); }
+    else { g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 1.8; g.beginPath(); g.moveTo(x - 3.5, y - 3.5); g.lineTo(x + 3.5, y + 3.5); g.moveTo(x + 3.5, y - 3.5); g.lineTo(x - 3.5, y + 3.5); g.stroke(); }
+  }
+}
 function continueBreak() {
   $('brk').classList.remove('show');
+  if (S.practiceDone) { S.practiceDone = false; startPractice(false); return; }
   if (S.boxFromPause) { S.boxFromPause = false; togglePause(); return; }
   if (S.phase === 'over' && S.mode === 'three') { startThree(); return; }
   if (S.phase === 'over' && S.mode === 'dunk') { startDunk(); return; }
@@ -1302,6 +1374,37 @@ function chasers() {
   for (const t of teams) { const s = t.slice().sort((a, b) => hyp(a.pos.x - lp.x, a.pos.z - lp.z) - hyp(b.pos.x - lp.x, b.pos.z - lp.z)); res.add(s[0]); res.add(s[1]); }
   return { set: res, lp };
 }
+function reboundPhase() {
+  if (S.phase !== 'live') return false;
+  if (ball.state === 'shot') return ball.missed || (ball.shot && ball.shot.kind !== 'ft' && ball.shot.t > 0.15 && ball.shot.kind !== 'dunk');
+  return ball.state === 'loose' && ball.missed && ball.pos.y > 1.4;
+}
+// 搶籃板：防守方轉身用屁股把自己的人卡在外面；進攻方長人衝籃下
+function reboundTarget(p, ch) {
+  const offT = ball.lastTeam, bx = basketX(offT);
+  const lp = ch ? ch.lp : ball.pos;
+  const low = ball.missed && ball.pos.y < 2.6 && ball.vel.y < 0;
+  if (p.team !== offT) {
+    const man = teams[offT][p.idx];
+    if (low && ch && ch.set.has(p) && hyp(lp.x - p.pos.x, lp.z - p.pos.z) < 1.8) { p.boxing = null; return null; } // 球下來了，離得近就去搶
+    if (man && hyp(man.pos.x - bx, man.pos.z) < 6.8) {
+      const dx = bx - man.pos.x, dz = -man.pos.z, d = hyp(dx, dz) || 1;
+      p.boxing = man;
+      const tx = man.pos.x + dx / d * 0.62, tz = man.pos.z + dz / d * 0.62;
+      return { x: tx, z: tz, spd: 1, sprint: hyp(tx - p.pos.x, tz - p.pos.z) > 1.4 };
+    }
+    return null;
+  }
+  const sh = ball.shot ? ball.shot.shooter : null;
+  if (p !== sh && (p.role >= 3 || hyp(p.pos.x - bx, p.pos.z) < 4.2)) {
+    // 繞過卡位的人往落點擠
+    const b = opp(p).find(o => o.boxing === p && hyp(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < 1.0);
+    let tx = lp.x, tz = lp.z;
+    if (b && (p.beatBoxT || 0) <= 0) { const sd = p.pos.z > b.pos.z ? 1 : -1; tz = b.pos.z + sd * 0.9; tx = b.pos.x; }
+    return { x: tx, z: tz, spd: 1, sprint: true };
+  }
+  return null;
+}
 function aiTarget(p, ch) {
   const ph = S.phase;
   if (['tipoff', 'break', 'over', 'title', 'intro', 'timeout', 'replay'].includes(ph)) return { x: p.pos.x, z: p.pos.z, spd: 0 };
@@ -1317,6 +1420,7 @@ function aiTarget(p, ch) {
   }
   if (p.oop && ball.state === 'pass' && ball.pass && ball.pass.lob && ball.pass.to === p) return { x: p.oop.spot.x, z: p.oop.spot.z, spd: 1, sprint: true };
   if (ball.state === 'pass' && ball.pass && ball.pass.to === p) return { x: p.pos.x + (ball.pos.x - p.pos.x) * 0.15, z: p.pos.z + (ball.pos.z - p.pos.z) * 0.15, spd: 0.5 };
+  if (reboundPhase()) { const rt = reboundTarget(p, ch); if (rt) return rt; }
   if ((ball.state === 'loose' || (ball.state === 'shot' && ball.shot && ball.shot.t > 0.3)) && ch && ch.set.has(p)) {
     const t = ball.pos.y < 1.2 ? ball.pos : ch.lp;
     return { x: t.x, z: t.z, spd: 1, sprint: true };
@@ -1399,7 +1503,7 @@ function aiHandler(p, dt) {
     } else { p.drive = { x: basketX(p.team) - S.attack[p.team] * 1.2, z: p.pos.z * 0.6 }; return p.drive; }
   }
   const q = shotProb(p, d, cd, three, 'jump');
-  if (three && d < 8.7 && cd > 1.4 && p.three >= 0.95 && p.holdT > 0.2 && Math.random() < 0.4) { startShot(p); return p.drive; }
+  if (three && d < 8.7 && cd > 1.25 && p.three >= 0.85 && p.holdT > 0.2 && Math.random() < 0.5) { startShot(p); return p.drive; }
   const thr = 0.33 + (S.shotClock > 14 ? 0.04 : 0) - (S.shotClock < 7 ? 0.08 : 0) - (three && cd > 1.6 ? 0.05 : 0);
   if ((p.holdT > 0.5 || (p.holdT > 0.2 && cd > 1.7)) && d < 8.4 && cd > 1.0 && q > thr && Math.random() < 0.55) { startShot(p); return p.drive; }
   // 被貼身防守時用運球招式
@@ -1408,7 +1512,7 @@ function aiHandler(p, dt) {
     if (t === p || !t.dunk) continue;
     const scr2 = S.screen[t.team];
     const rolling = t.cutting > 0 || (scr2 && scr2.screener === t && scr2.stage === 'roll');
-    if (rolling && distB(t) < 4.4 && d > 3.5 && nearestOpp(t)[1] > 0.9 && Math.random() < 0.28) { doPass(p, t); return p.drive; }
+    if (rolling && distB(t) < 4.4 && d > 3.5 && nearestOpp(t)[1] > 0.9 && Math.random() < 0.16) { doPass(p, t); return p.drive; }
   }
   // 低位戰術：把球餵給低位
   if (S.play[p.team] === 'post') {
@@ -1452,8 +1556,9 @@ function updatePlayers(dt) {
   const ch = (ball.state === 'loose' || ball.state === 'shot') ? chasers() : null;
   const F = 720 / S.qlen;
   for (const p of players) {
-    p.slowT -= dt; p.stealCD -= dt; p.noGrabT -= dt; p.landT -= dt; p.moveCD -= dt; p.openT -= dt;
+    p.slowT -= dt; p.stealCD -= dt; p.noGrabT -= dt; p.landT -= dt; p.moveCD -= dt; p.openT -= dt; p.boxedT = (p.boxedT || 0) - dt; p.beatBoxT = (p.beatBoxT || 0) - dt;
     if (ball.holder === p) p.holdT += dt;
+    if (!reboundPhase() || p.action) p.boxing = null;
     if (S.phase === 'live') { p.st.sec += dt; p.sta = Math.max(0.05, p.sta - dt * F * (0.0007 + (p.sprint ? 0.0009 : 0))); }
     if (p.cutting > 0) p.cutting -= dt;
     else if (S.poss === p.team && ball.holder !== p && S.phase === 'live') { p.cutT -= dt; if (p.cutT < 0) { p.cutT = rand(4, 9); if (p.idx !== 0 && S.play[p.team] !== 'post' && Math.random() < (p.dunk ? 0.75 : 0.5)) { p.cutting = 1.7; p.cutSide = rand(-1.0, 1.0); } } }
@@ -1471,7 +1576,7 @@ function updatePlayers(dt) {
       } else if ((p.action === 'layup' || p.action === 'dunk') && !p.released) {
         // 拉桿：空中把球收到腰間、換到另一側再出手，等防守者先落下
         if (!p.clutch && p.jy > 0.2 && p.jv > -0.5 && ((user && inp.b4Down) || (!user && opp(p).some(o => o.jy > 0.2 && hyp(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < 1.4) && Math.random() < 0.5))) {
-          p.clutch = { t: 0 }; p.hand = -p.hand; if (p.jv > 0.6) p.jv = Math.max(p.jv, 1.2);
+          p.clutch = { t: 0 }; p.hand = -p.hand; if (user) tutEv('clutch'); if (p.jv > 0.6) p.jv = Math.max(p.jv, 1.2);
           if (S.phase === 'live') setTimeout(() => say(pick(['空中拉桿！', '漂亮的拉桿！']), 1), 250);
         }
         if (p.clutch) { p.clutch.t += dt; if (p.clutch.t > 0.24) releaseShot(p, null); }
@@ -1583,6 +1688,7 @@ function updatePlayers(dt) {
     // ---- 面向 ----
     let fa = null;
     if (['shoot', 'layup', 'dunk', 'hang', 'pass', 'steal', 'ftshoot', 'follow', 'dream'].includes(p.action) || p.moveT > 0) fa = null;
+    else if (p.boxing && hyp(p.boxing.pos.x - p.pos.x, p.boxing.pos.z - p.pos.z) < 1.6) fa = Math.atan2(basketX(p.boxing.team) - p.pos.x, -p.pos.z);
     else if (p.post && ball.holder === p) fa = Math.atan2(p.pos.x - basketX(p.team), p.pos.z);
     else if (ball.holder === p && S.phase !== 'ft') { const sp = hyp(p.vel.x, p.vel.z); fa = sp > 1 ? Math.atan2(p.vel.x, p.vel.z) : Math.atan2(basketX(p.team) - p.pos.x, -p.pos.z); }
     else if (S.phase === 'ft') fa = Math.atan2(basketX(S.ft ? S.ft.team : 0) - p.pos.x, -p.pos.z);
@@ -1600,6 +1706,7 @@ function updatePlayers(dt) {
     else if (p.action === 'dunk' && p.dunk && p.dunk.style === 'windmill') p.pose = 'windmill';
     else if (ball.holder === p && p.post && S.phase === 'live') { p.pose = 'post'; p.dribblePh += dt * 6; }
     else if (p.action) p.pose = p.action === 'rebound' ? 'rebound' : p.action;
+    else if (p.boxing && hyp(p.boxing.pos.x - p.pos.x, p.boxing.pos.z - p.pos.z) < 1.3) p.pose = 'boxout';
     else if (p.moveT > 0 && (p.moveKind === 'cross' || p.moveKind === 'behind')) { p.pose = p.moveKind; p.dribblePh += dt * 14; }
     else if (p.moveT > 0 && p.moveKind === 'hesi' && p.moveT > p.moveDur - 0.25) { p.pose = 'hesi'; p.dribblePh += dt * 9; }
     else if (ball.holder === p) {
@@ -1613,6 +1720,17 @@ function updatePlayers(dt) {
     else if (S.phase === 'ft' || S.phase === 'dead' || S.phase === 'timeout') p.pose = hyp(p.vel.x, p.vel.z) > 0.6 ? 'run' : 'idle';
     else if (S.poss !== p.team && S.phase === 'live' && ball.holder && hyp(teams[1 - p.team][p.idx].pos.x - p.pos.x, teams[1 - p.team][p.idx].pos.z - p.pos.z) < 3.2 && hyp(p.vel.x, p.vel.z) < 4) p.pose = 'defense';
     else p.pose = 'run';
+  }
+  // ---- 卡位接觸：被卡在身後的人速度變慢、被往外推；籃板能力強的偶爾能繞過去 ----
+  for (const p of players) {
+    const o = p.boxing; if (!o || p.jy > 0) continue;
+    const bx = basketX(o.team), dx = o.pos.x - p.pos.x, dz = o.pos.z - p.pos.z, d = hyp(dx, dz);
+    const behind = (o.pos.x - bx) * (o.pos.x - bx) + o.pos.z * o.pos.z > (p.pos.x - bx) * (p.pos.x - bx) + p.pos.z * p.pos.z;
+    if (d < 0.85 && behind && o.beatBoxT <= 0 && o.jy === 0) {
+      o.boxedT = 0.25; o.slowT = Math.max(o.slowT, 0.12);
+      if (d > 0.01) { o.pos.x += dx / d * 0.5 * dt; o.pos.z += dz / d * 0.5 * dt; }
+      if (Math.random() < dt * 0.9 * o.reb / Math.max(0.5, p.reb) * (o.role >= 3 ? 1.2 : 0.8)) o.beatBoxT = 0.7;
+    }
   }
   // ---- 身體碰撞與帶球撞人 ----
   S.chargeCD -= dt;
@@ -1775,6 +1893,81 @@ function soloSetup(p) {
   document.body.classList.add('solo'); document.body.classList.toggle('solo3', S.mode === 'three'); $('chud').style.display = 'block';
 }
 function giveSoloBall(p) { ball.state = 'held'; ball.holder = p; ball.shot = null; ball.vel.set(0, 0, 0); ball.missed = false; ball.rimTouched = false; p.holdT = 0; }
+// ================= 練習／教學 =================
+// 練習：一個人在半場自由投籃、運球、灌籃；球落地後會自動彈回手上
+// 教學：同一個場地，照步驟一個一個做，完成才進下一步（說明用底部字幕＋語音）
+const tutRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.75, 40), new THREE.MeshBasicMaterial({ color: 0x5dd36b, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false }));
+tutRing.rotation.x = -Math.PI / 2; tutRing.position.y = 0.02; tutRing.visible = false; scene.add(tutRing);
+const TUT = [
+  { text: '歡迎來到教學。用左下角的搖桿移動，走到地上的綠色圈圈。', ring: [6.0, 3.5], done: (p, t) => t.atRing },
+  { text: '很好！按住右邊的「加速」再推搖桿，可以跑得更快。加速跑到下一個圈圈。', ring: [9.5, -4.0], done: (p, t) => t.atRing && t.sprinted },
+  { text: '持球時按「招式」做運球招式：搖桿往旁邊推是換手或胯下，往後拉是後撤步，不推是轉身。做一次招式。', done: (p, t) => t.ev.move },
+  { text: '練跳投：按住「投籃」，力道條會往上跑，在綠色區放開就是完美出手。投一次完美出手。', ring: [4.6, 0], done: (p, t) => t.ev.perfect },
+  { text: '綠色區會變寬變窄：離籃框越遠、被防守越緊就越窄。到三分線外投進一球。', ring: [8.0, 0], done: (p, t) => t.ev.three },
+  { text: '往籃框跑，靠近時按「投籃」就是上籃。上籃進一球。', ring: [7.0, -3.0], done: (p, t) => t.ev.layup },
+  { text: '按住「加速」往籃框衝，靠近時按「投籃」就是灌籃。灌進一球。', ring: [8.0, 2.5], done: (p, t) => t.ev.dunk },
+  { text: '上籃或灌籃跳起來之後，在空中按「招式」就是拉桿，可以躲過封阻。做一次空中拉桿。', done: (p, t) => t.ev.clutch },
+  { text: '沿著底線切入，靠近籃框時把搖桿往籃框另一邊推再按「投籃」，就是反手上籃。做一次反手上籃。', ring: [1.2, 4.0], done: (p, t) => t.ev.reverse },
+  { text: '教學完成！之後可以在主畫面選「練習」自由練習。', done: (p, t) => t.t > 5 },
+];
+function tutEv(k) { if (S.tut) S.tut.ev[k] = true; }
+function tutStep(i) {
+  const t = S.tut; t.i = i; t.t = 0; t.ev = {}; t.atRing = false; t.sprinted = false;
+  const st = TUT[i]; t.text = st.text; say(st.text, 3);
+  if (st.ring) { const w = toWorld(0, st.ring[0], st.ring[1]); tutRing.position.set(w.x, 0.02, w.z); tutRing.visible = true; } else tutRing.visible = false;
+}
+function startPractice(tutorial) {
+  S.mode = tutorial ? 'tutorial' : 'practice';
+  const p = roster[0][2]; soloSetup(p);
+  $('chud').style.display = 'none';
+  const w = toWorld(0, 8.0, 0); p.pos.set(w.x, 0, w.z); p.facing = Math.atan2(BASKET_X - p.pos.x, -p.pos.z);
+  giveSoloBall(p); S.phase = 'practice'; S.pr = { idle: 0, ret: null, makes: 0 };
+  S.tut = null;
+  if (tutorial) { S.tut = { i: 0, t: 0, ev: {} }; tutStep(0); } else say('自由練習：投籃、運球、灌籃都可以，球會自動回到你手上。', 2);
+}
+function practiceScored() {
+  const sh = ball.shot; if (!sh || S.pr.counted === sh) return;
+  S.pr.counted = sh; sfx.swish();
+  if (ball.hRec) ball.hRec.made = true;
+  if (sh.kind === 'dunk') { sfx.slam(); buzz(60); }
+  if (sh.three) tutEv('three'); if (sh.kind === 'layup') tutEv('layup'); if (sh.kind === 'dunk') tutEv('dunk');
+}
+function updatePractice(dt) {
+  const p = ctrl, pr = S.pr;
+  if (ball.holder === p && !p.action) {
+    if (inp.b1Down) startShot(p);
+    if (inp.b4Down) doMove(p);
+  } else if (ball.holder !== p && inp.b1Down && !p.action && jump(p, 3.45)) { p.action = 'rebound'; p.actT = 0; }
+  updatePlayers(dt);
+  if (pr.ret) { // 球自己彈回來：沿拋物線飛回球員胸前
+    const R = pr.ret; R.t += dt; const u = Math.min(1, R.t / R.T);
+    const to = chest(p);
+    ball.pos.lerpVectors(R.from, to, u); ball.pos.y += Math.sin(u * Math.PI) * 1.2;
+    if (u >= 1) { pr.ret = null; giveSoloBall(p); }
+  } else {
+    stepBall(dt);
+    if (ball.holder !== p && ball.state !== 'pass') {
+      if (hyp(ball.pos.x - p.pos.x, ball.pos.z - p.pos.z) < 0.55 && ball.pos.y < 2.3 + p.jy && ball.state !== 'shot') giveSoloBall(p); // 自己撿到
+      else {
+        const settled = ball.pos.y < 0.5 || Math.abs(ball.pos.x) > HX || Math.abs(ball.pos.z) > HZ;
+        pr.idle = settled ? pr.idle + dt : 0;
+        if (pr.idle > 0.9) { pr.idle = 0; ball.state = 'dead'; ball.vel.set(0, 0, 0); pr.ret = { from: ball.pos.clone(), t: 0, T: 0.75 }; }
+      }
+    }
+  }
+  const t = S.tut; if (!t) return;
+  t.t += dt;
+  if (tutRing.visible) { tutRing.material.opacity = 0.55 + Math.sin(t.t * 5) * 0.25; if (hyp(p.pos.x - tutRing.position.x, p.pos.z - tutRing.position.z) < 0.8) { t.atRing = true; } }
+  if (p.sprint) t.sprinted = true;
+  if (t.i === 1 && !t.sprinted) t.atRing = false;
+  if (t.wait > 0) { t.wait -= dt; if (t.wait <= 0) { if (t.i + 1 < TUT.length) tutStep(t.i + 1); else tutDone(); } return; }
+  if (TUT[t.i].done(p, t)) { sfx.cheer(0.4); if (t.i + 1 < TUT.length) say(pick(['很好！', '漂亮！', '做得好！']), 3); t.wait = 1.6; tutRing.visible = false; }
+}
+function tutDone() {
+  S.tut = null; $('sub').className = ''; S.mode = 'practice';
+  $('brkTitle').textContent = '教學完成'; $('brkSub').textContent = '接下來可以自由練習，或回主畫面開始比賽'; $('brkStats').innerHTML = '';
+  $('brkBtn').textContent = '自由練習'; $('brkBtn2').style.display = ''; S.practiceDone = true; $('brk').classList.add('show');
+}
 function startThree() {
   S.mode = 'three'; buildRacks();
   const p = roster[0][1]; soloSetup(p);
@@ -1887,7 +2080,7 @@ function exitSolo() {
   document.body.classList.remove('solo', 'solo3'); $('chud').style.display = 'none'; $('judges').classList.remove('show'); $('brkBtn2').style.display = 'none';
   racks.forEach(r => r.visible = false);
   for (const q of [...roster[0], ...roster[1]]) { q.hidden = false; q.scripted = null; q.forceStyle = null; q.forceMake = null; }
-  referee.hidden = false; S.contestOver = false; S.c3 = null; S.cd = null;
+  referee.hidden = false; S.contestOver = false; S.c3 = null; S.cd = null; S.pr = null; S.tut = null; tutRing.visible = false; $('sub').className = '';
 }
 
 // ================= 設定 =================
@@ -1939,9 +2132,10 @@ function update(dt) {
   if (S.phase !== 'title' && !S.paused) {
     if (S.phase === 'intro') { updateIntro(dt); inp.b1Down = inp.b1Up = inp.b2Down = inp.b4Down = false; return; }
     if (S.phase === 'contest3') { updateContest3(dt); inp.b1Down = inp.b1Up = inp.b2Down = inp.b4Down = false; return; }
+    if (S.phase === 'practice') { updatePractice(dt); inp.b1Down = inp.b1Up = inp.b2Down = inp.b4Down = false; return; }
     if (S.phase === 'contestD') { updateDunk(dt); inp.b1Down = inp.b1Up = inp.b2Down = inp.b4Down = false; return; }
     if (S.phase === 'replay') { updateReplay(dt); inp.b1Down = inp.b1Up = inp.b2Down = inp.b4Down = false; return; }
-    if (S.phase === 'timeout') { updateBench(dt); inp.b1Down = inp.b1Up = inp.b2Down = inp.b4Down = false; return; }
+    if (S.phase === 'timeout') { updateBench(dt); updateHuddle(dt); inp.b1Down = inp.b1Up = inp.b2Down = inp.b4Down = false; return; }
     S.gameT += dt;
     if (inp.b4Down && ball.holder?.team !== 0 && S.phase !== 'ft') {
       let best = null, bd = 1e9; for (const p of teams[0]) { if (p === ctrl) continue; const d = hyp(p.pos.x - ball.pos.x, p.pos.z - ball.pos.z); if (d < bd) { bd = d; best = p; } }
@@ -2027,6 +2221,10 @@ function updateCamera(dt) {
     camLook.set(bx * 0.6 + ctrl.pos.x * 0.4, 2.3, ctrl.pos.z * 0.4); camera.lookAt(camLook);
     return;
   }
+  if (S.phase === 'timeout') { // 暫停：從記錄台後方看中場表演，兩隊在邊線圍圈
+    camera.position.lerp(new THREE.Vector3(0, 5.2, 16.5), 1 - Math.exp(-dt * 2.5));
+    camLook.lerp(new THREE.Vector3(0, 0.9, 3.2), 1 - Math.exp(-dt * 2.5)); camera.lookAt(camLook); return;
+  }
   if (S.phase === 'replay' && S.replay) {
     const s = S.replay.side;
     const bp = ball.pos;
@@ -2087,6 +2285,8 @@ function updateNet(n, dt) {
 }
 function render(dt) {
   const replay = S.phase === 'replay';
+  extras.update(dt, S.phase === 'timeout' || (S.phase === 'break' && !S.contestOver));
+  for (const a of extras.list) { a.shadow.position.set(a.rig.root.position.x, 0.012, a.rig.root.position.z); }
   if (!replay) {
     for (const p of players) animatePlayer(p, dt);
     animatePlayer(referee, dt);
@@ -2170,13 +2370,14 @@ function frame(now) {
 
 // ================= 選單 =================
 function startMode() {
-  if (S.mode === 'three') startThree(); else if (S.mode === 'dunk') startDunk(); else { if (S.mode === 'series' && !S.series) S.series = store.get('series', null) || { wins: [0, 0], game: 1 }; newGame(); }
+  if (S.mode === 'three') startThree(); else if (S.mode === 'dunk') startDunk(); else if (S.mode === 'practice' || S.mode === 'tutorial') startPractice(S.mode === 'tutorial'); else { if (S.mode === 'series' && !S.series) S.series = store.get('series', null) || { wins: [0, 0], game: 1 }; newGame(); }
 }
 function applyTeamColors() {
   for (let t = 0; t < 2; t++) {
     const c = PALETTE[S.colors[t]];
     if (TEAM_INFO[t].color === c.color && TEAM_INFO[t].name === c.name) continue;
     Object.assign(TEAM_INFO[t], { name: c.name, color: c.color, dark: c.dark, num: c.num, trim: c.trim });
+    if (t === 0) { const m = extras.mascot.rig.mats; m.jersey.map.dispose(); m.jersey.map = jerseyTexture(0, '00'); m.jersey.needsUpdate = true; m.shorts.map.dispose(); m.shorts.map = shortsTexture(0); m.shorts.needsUpdate = true; }
     for (const p of roster[t]) { const m = p.rig.mats; m.jersey.map.dispose(); m.jersey.map = jerseyTexture(t, p.num); m.jersey.needsUpdate = true; m.shorts.map.dispose(); m.shorts.map = shortsTexture(t); m.shorts.needsUpdate = true; }
   }
   for (let t = 0; t < 2; t++) { document.querySelector('#board .t' + t).style.background = PALETTE[S.colors[t]].ui; $('tn' + t).textContent = TEAM_INFO[t].name; document.documentElement.style.setProperty('--c' + t, PALETTE[S.colors[t]].ui); }
@@ -2187,7 +2388,7 @@ function newGame() {
   S.score = [0, 0]; S.quarter = 1; S.attack = [1, -1]; S.clock = S.qlen; S.shotClock = 24; S.pendingEnd = false; S.pendingFT = null; S.ft = null;
   S.teamFouls = [0, 0]; S.timeouts = [7, 7]; S.gameT = 0; S.lastReplay = -99; S.run = [0, 0]; S.aiTOused = false; S.subQueue = []; S.highlight = null; S.keepAfterFT = null;
   S.play[1] = 'motion'; S.defense[1] = 'man'; S.runClock = false;
-  S.stats = [0, 1].map(() => ({ fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, reb: 0, stl: 0, blk: 0, tov: 0, pf: 0 }));
+  S.shots = []; S.stats = [0, 1].map(() => ({ fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, reb: 0, stl: 0, blk: 0, tov: 0, pf: 0 }));
   for (let t = 0; t < 2; t++) roster[t].forEach((p, i) => { p.onCourt = i < 5; p.idx = i < 5 ? p.role : -1; p.chair = -1; p.walkTo = null; p.sta = 1; p.st = newStats(); p.hand = 1; p.ftSpot = null; });
   rebuildLists();
   REC.frames = [];
@@ -2197,7 +2398,7 @@ function newGame() {
 function togglePause() {
   if (['title', 'over', 'break', 'timeout', 'intro', 'replay'].includes(S.phase)) return;
   S.paused = !S.paused;
-  $('callTO').style.display = $('lineup').style.display = $('boxBtn').style.display = (S.mode === 'three' || S.mode === 'dunk') ? 'none' : ''; $('pause').classList.toggle('show', S.paused);
+  $('callTO').style.display = $('lineup').style.display = $('boxBtn').style.display = (S.mode === 'three' || S.mode === 'dunk' || S.mode === 'practice' || S.mode === 'tutorial') ? 'none' : ''; $('pause').classList.toggle('show', S.paused);
   if (S.paused) { $('callTO').disabled = !canUserTimeout(); $('callTO').textContent = `叫暫停（剩 ${S.timeouts[0]} 次）`; }
 }
 S.mode = 'game'; S.colors = store.get('colors', [0, 1]); S.series = store.get('series', null);
@@ -2206,9 +2407,9 @@ function renderColorOpts() {
     const g = document.querySelector(`.opt[data-k="${k}"]`); const t = k === 'c0' ? 0 : 1;
     g.querySelectorAll('button').forEach(b => { b.classList.toggle('on', +b.dataset.v === S.colors[t]); b.disabled = +b.dataset.v === S.colors[1 - t]; });
   }
-  const m = { game: '開始比賽', series: S.series && (S.series.wins[0] || S.series.wins[1]) ? `繼續系列賽（${S.series.wins[0]}:${S.series.wins[1]}）` : '開始系列賽', three: '開始三分大賽', dunk: '開始灌籃大賽' };
+  const m = { game: '開始比賽', series: S.series && (S.series.wins[0] || S.series.wins[1]) ? `繼續系列賽（${S.series.wins[0]}:${S.series.wins[1]}）` : '開始系列賽', three: '開始三分大賽', dunk: '開始灌籃大賽', practice: '開始練習', tutorial: '開始教學' };
   $('start').textContent = m[S.mode];
-  document.querySelectorAll('.opt[data-k="q"], .opt[data-k="c1"]').forEach(g => g.style.display = S.mode === 'three' || S.mode === 'dunk' ? 'none' : '');
+  document.querySelectorAll('.opt[data-k="q"], .opt[data-k="c1"]').forEach(g => g.style.display = ['three', 'dunk', 'practice', 'tutorial'].includes(S.mode) ? 'none' : '');
 }
 document.querySelectorAll('.opt').forEach(g => {
   if (g.dataset.k === 'c0' || g.dataset.k === 'c1') g.insertAdjacentHTML('beforeend', PALETTE.map((c, i) => `<button class="sw" data-v="${i}" style="background:${c.ui}" title="${c.name}"></button>`).join(''));
@@ -2276,7 +2477,7 @@ $('resume').addEventListener('click', togglePause);
 $('callTO').addEventListener('click', () => { if (!canUserTimeout()) return; S.paused = false; $('pause').classList.remove('show'); callTimeout(0); });
 $('lineup').addEventListener('click', () => { $('pause').classList.remove('show'); openSubPanel(false); });
 $('boxBtn').addEventListener('click', () => { boxTab = 0; renderBox(); $('pause').classList.remove('show'); $('brkTitle').textContent = '比賽數據'; $('brkSub').textContent = `${TEAM_INFO[0].name} ${S.score[0]} : ${S.score[1]} ${TEAM_INFO[1].name}`; $('brkBtn').textContent = '回到比賽'; S.boxFromPause = true; $('brk').classList.add('show'); });
-$('restart').addEventListener('click', () => { S.paused = false; $('pause').classList.remove('show'); newGame(); });
+$('restart').addEventListener('click', () => { S.paused = false; $('pause').classList.remove('show'); if (['three', 'dunk', 'practice', 'tutorial'].includes(S.mode)) { exitSolo(); rebuildAfterSolo(); $('title').classList.remove('show'); $('hud').classList.add('show'); startMode(); } else newGame(); });
 $('quit').addEventListener('click', () => { S.paused = false; $('pause').classList.remove('show'); $('hud').classList.remove('show'); exitSolo(); S.phase = 'title'; $('title').classList.add('show'); rebuildAfterSolo(); });
 let muted = false; $('mute').addEventListener('click', () => { muted = !muted; setMuted(muted); $('mute').textContent = muted ? '音效：關' : '音效：開'; });
 document.addEventListener('visibilitychange', () => { if (document.hidden && !S.paused && !['title', 'over', 'break', 'timeout'].includes(S.phase)) togglePause(); });
@@ -2286,5 +2487,5 @@ for (let t = 0; t < 2; t++) roster[t].forEach(p => { if (!p.onCourt) p.pos.copy(
 startTipoff(); S.phase = 'title'; ball.state = 'dead'; ball.pos.set(0, BALL_R, 1);
 camLook.set(0, 0.6, 0);
 if (AUTO) { S.qlen = +(params.get('q') || 60); S.diff = 1; newGame(); }
-window.__g = { doPass, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
+window.__g = { doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
 requestAnimationFrame(frame);
