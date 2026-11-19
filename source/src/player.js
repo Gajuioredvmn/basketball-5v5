@@ -103,7 +103,7 @@ function skinBuilder(bones) {
   const groups = {};
   return {
     add(group, g, color, bone, opt = {}) {
-      const { x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1, rx = 0, parent = null, child = null, len = 0.3, axis = -1, r = 0.07 } = opt;
+      const { x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1, rx = 0, parent = null, child = null, len = 0.3, axis = -1, r = 0.07, full = false } = opt;
       const c = g.clone().toNonIndexed();
       _m.compose(new THREE.Vector3(x, y, z), _q.setFromEuler(_e.set(rx, 0, 0)), new THREE.Vector3(sx, sy, sz));
       c.applyMatrix4(_m);
@@ -114,7 +114,7 @@ function skinBuilder(bones) {
         const along = axis * pos.getY(i);
         let w = 0, oi = 0;
         if (pi >= 0 && along < r) { w = 0.5 * (1 - Math.max(0, along) / r); oi = pi; }
-        else if (ci >= 0 && along > len - r) { w = 0.5 * (1 - Math.max(0, len - along) / r); oi = ci; }
+        else if (ci >= 0 && along > len - r) { w = full ? Math.min(1, 0.5 + (along - len) / r * 0.5) : 0.5 * (1 - Math.max(0, len - along) / r); oi = ci; }
         si[i * 4] = bi; si[i * 4 + 1] = oi; sw[i * 4] = 1 - w; sw[i * 4 + 1] = w;
       }
       // 轉到骨架的綁定空間
@@ -153,47 +153,50 @@ export function makePlayerMesh(team, idx, number, scale, skinIdx, opts = {}) {
   const body = B(); root.add(body);
   const hips = B(); hips.position.y = 1.052; body.add(hips);
   const legs = [];
-  for (const side of [1, -1]) { const hip = B(); hip.position.set(side * 0.105, -0.06, 0); hips.add(hip); const knee = B(); knee.position.y = -0.47; hip.add(knee); legs.push({ hip, knee }); }
+  for (const side of [1, -1]) { const hip = B(); hip.position.set(side * 0.105, -0.06, 0); hips.add(hip); const knee = B(); knee.position.y = -0.47; hip.add(knee); const ankle = B(); ankle.position.y = -0.43; knee.add(ankle); legs.push({ hip, knee, ankle }); }
+  // 腰（torso）→ 胸（chest）→ 脖子（neck）→ 頭；肩膀掛在胸上，上下半身可以分開扭轉
   const torso = B(); hips.add(torso);
-  const headG = B(); headG.position.y = 0.84; torso.add(headG);
+  const chest = B(); chest.position.y = 0.32; torso.add(chest);
+  const neck = B(); neck.position.y = 0.3; chest.add(neck);
+  const headG = B(); headG.position.y = 0.22; neck.add(headG);
   const arms = [];
-  for (const side of [1, -1]) { const sh = B(); sh.position.set(side * 0.27, 0.535, 0); torso.add(sh); const el = B(); el.position.y = -0.3; sh.add(el); arms.push({ sh, el }); }
-  const bones = [body, hips, legs[0].hip, legs[0].knee, legs[1].hip, legs[1].knee, torso, headG, arms[0].sh, arms[0].el, arms[1].sh, arms[1].el];
+  for (const side of [1, -1]) { const sh = B(); sh.position.set(side * 0.27, 0.215, 0); chest.add(sh); const el = B(); el.position.y = -0.3; sh.add(el); const wr = B(); wr.position.y = -0.25; el.add(wr); arms.push({ sh, el, wr }); }
+  const bones = [body, hips, legs[0].hip, legs[0].knee, legs[1].hip, legs[1].knee, torso, headG, arms[0].sh, arms[0].el, arms[1].sh, arms[1].el, chest, neck, legs[0].ankle, legs[1].ankle, arms[0].wr, arms[1].wr];
   root.updateMatrixWorld(true);
   const skel = new THREE.Skeleton(bones);
   const sb = skinBuilder(bones);
 
   // ---- 腿 ----
-  legs.forEach(({ hip, knee }, i) => {
+  legs.forEach(({ hip, knee, ankle }, i) => {
     const side = i === 0 ? 1 : -1;
     sb.add('skin', geo('thigh', () => lathe([[0.001, 0.03], [0.07, 0.03], [0.09, -0.02], [0.096, -0.14], [0.086, -0.3], [0.064, -0.44], [0.056, -0.5], [0.001, -0.51]])), skinCol, hip, { parent: hips, child: knee, len: 0.47, r: 0.09 });
-    sb.add('skin', geo('calf', () => lathe([[0.001, 0.04], [0.054, 0.03], [0.058, 0.0], [0.07, -0.1], [0.066, -0.18], [0.047, -0.32], [0.039, -0.42], [0.001, -0.43]])), skinCol, knee, { parent: hip, r: 0.08 });
-    sb.add('skin', geo('sock', () => new THREE.CylinderGeometry(0.051, 0.044, 0.2, 14)), sockCol, knee, { y: -0.35 });
+    sb.add('skin', geo('calf', () => lathe([[0.001, 0.04], [0.054, 0.03], [0.058, 0.0], [0.07, -0.1], [0.066, -0.18], [0.047, -0.32], [0.039, -0.42], [0.001, -0.43]])), skinCol, knee, { parent: hip, child: ankle, len: 0.43, r: 0.06, full: true });
+    sb.add('skin', geo('sock', () => new THREE.CylinderGeometry(0.051, 0.044, 0.2, 14)), sockCol, knee, { y: -0.35, child: ankle, len: 0.43, r: 0.05, full: true });
     // 高筒籃球鞋：鞋身、鞋領、鞋底、鞋頭、側邊飾條
-    sb.add('skin', geo('shoe', () => new THREE.BoxGeometry(0.112, 0.1, 0.27, 2, 2, 3)), shoeCol, knee, { y: -0.455, z: 0.035 });
-    sb.add('skin', geo('collar', () => new THREE.CylinderGeometry(0.06, 0.062, 0.07, 14)), shoeCol, knee, { y: -0.4, z: -0.02 });
-    sb.add('skin', geo('sole', () => new THREE.BoxGeometry(0.12, 0.03, 0.3)), soleCol, knee, { y: -0.509, z: 0.04 });
-    sb.add('skin', geo('toe', () => new THREE.SphereGeometry(0.057, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2)), shoeCol, knee, { y: -0.497, z: 0.165, sx: 1, sy: 0.9, sz: 0.72 });
-    sb.add('skin', geo('stripe', () => new THREE.BoxGeometry(0.116, 0.02, 0.16)), accent, knee, { y: -0.46, z: 0.02, rx: -0.35 });
-    sb.add('skin', geo('lace', () => new THREE.BoxGeometry(0.06, 0.012, 0.12)), soleCol, knee, { y: -0.402, z: 0.09, rx: -0.25 });
+    sb.add('skin', geo('shoe', () => new THREE.BoxGeometry(0.112, 0.1, 0.27, 2, 2, 3)), shoeCol, ankle, { y: -0.025, z: 0.035 });
+    sb.add('skin', geo('collar', () => new THREE.CylinderGeometry(0.06, 0.062, 0.07, 14)), shoeCol, ankle, { y: 0.03, z: -0.02 });
+    sb.add('skin', geo('sole', () => new THREE.BoxGeometry(0.12, 0.03, 0.3)), soleCol, ankle, { y: -0.079, z: 0.04 });
+    sb.add('skin', geo('toe', () => new THREE.SphereGeometry(0.057, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2)), shoeCol, ankle, { y: -0.067, z: 0.165, sx: 1, sy: 0.9, sz: 0.72 });
+    sb.add('skin', geo('stripe', () => new THREE.BoxGeometry(0.116, 0.02, 0.16)), accent, ankle, { y: -0.03, z: 0.02, rx: -0.35 });
+    sb.add('skin', geo('lace', () => new THREE.BoxGeometry(0.06, 0.012, 0.12)), soleCol, ankle, { y: 0.028, z: 0.09, rx: -0.25 });
     // 過膝球褲褲管（權重分給腰部，胯下比較順）
     sb.add('shorts', geo('shortleg', () => new THREE.CylinderGeometry(0.122, 0.132, 0.42, 18, 3, true)), null, hip, { x: side * 0.01, y: -0.19, parent: hips, len: 0.42, r: 0.16, sz: 0.95 });
   });
   sb.add('shorts', geo('shorts', () => new THREE.CylinderGeometry(0.205, 0.238, 0.26, 18, 2, true)), null, hips, { y: -0.07, sz: 0.78 });
   // ---- 軀幹（球衣），腰部權重分給骨盆 ----
-  sb.add('jersey', geo('torso', () => lathe([[0.2, -0.03], [0.173, 0.0], [0.168, 0.12], [0.19, 0.28], [0.216, 0.4], [0.233, 0.5], [0.206, 0.57], [0.12, 0.62], [0.05, 0.635]], 22, Math.PI, Math.PI * 2)), null, torso, { y: 0.04, sz: 0.62, parent: hips, axis: 1, r: 0.12 });
+  sb.add('jersey', geo('torso', () => lathe([[0.2, -0.03], [0.173, 0.0], [0.168, 0.12], [0.19, 0.28], [0.216, 0.4], [0.233, 0.5], [0.206, 0.57], [0.12, 0.62], [0.05, 0.635]], 22, Math.PI, Math.PI * 2)), null, torso, { y: 0.04, sz: 0.62, parent: hips, child: chest, len: 0.32, axis: 1, r: 0.12, full: true });
   sb.add('skin', geo('waistband', () => new THREE.CylinderGeometry(0.205, 0.205, 0.045, 18)), t.trim, hips, { y: 0.06, sz: 0.76 });
-  sb.add('skin', geo('trap', () => new THREE.SphereGeometry(0.11, 14, 8)), skinCol, torso, { y: 0.6, z: -0.01, sx: 1.25, sy: 0.45, sz: 0.7 });
-  sb.add('skin', geo('neck', () => new THREE.CylinderGeometry(0.056, 0.066, 0.16, 12, 2)), skinCol, torso, { y: 0.69 });
+  sb.add('skin', geo('trap', () => new THREE.SphereGeometry(0.11, 14, 8)), skinCol, chest, { y: 0.28, z: -0.01, sx: 1.25, sy: 0.45, sz: 0.7 });
+  sb.add('skin', geo('neck', () => new THREE.CylinderGeometry(0.056, 0.066, 0.16, 12, 2)), skinCol, neck, { y: 0.07, parent: chest, axis: 1, r: 0.05 });
   // ---- 手臂：肩膀權重分給軀幹、手肘彎曲順接 ----
-  arms.forEach(({ sh, el }, i) => {
+  arms.forEach(({ sh, el, wr }, i) => {
     const side = i === 0 ? 1 : -1;
     const armCol = sleeve && side === -1 ? sleeveCol : skinCol;
-    sb.add('skin', geo('delt', () => new THREE.SphereGeometry(0.074, 14, 10)), skinCol, sh, { x: side * 0.008, y: -0.025, sy: 1.12, sx: 0.95, parent: torso, r: 0.1 });
-    sb.add('skin', geo('uarm', () => lathe([[0.001, 0.02], [0.056, 0.0], [0.063, -0.1], [0.056, -0.2], [0.045, -0.29], [0.04, -0.32], [0.001, -0.33]])), armCol, sh, { parent: torso, child: el, len: 0.3, r: 0.07 });
-    sb.add('skin', geo('farm', () => lathe([[0.001, 0.04], [0.042, 0.03], [0.048, 0], [0.051, -0.07], [0.041, -0.18], [0.033, -0.25], [0.001, -0.26]])), armCol, el, { parent: sh, r: 0.07 });
-    sb.add('skin', geo('hand', () => new THREE.SphereGeometry(0.05, 12, 10)), skinCol, el, { y: -0.3, z: 0.01, sx: 0.75, sy: 1.35, sz: 0.5 });
-    sb.add('skin', geo('thumb', () => new THREE.CapsuleGeometry(0.014, 0.04, 3, 6)), skinCol, el, { x: side * -0.02, y: -0.285, z: 0.035 });
+    sb.add('skin', geo('delt', () => new THREE.SphereGeometry(0.074, 14, 10)), skinCol, sh, { x: side * 0.008, y: -0.025, sy: 1.12, sx: 0.95, parent: chest, r: 0.1 });
+    sb.add('skin', geo('uarm', () => lathe([[0.001, 0.02], [0.056, 0.0], [0.063, -0.1], [0.056, -0.2], [0.045, -0.29], [0.04, -0.32], [0.001, -0.33]])), armCol, sh, { parent: chest, child: el, len: 0.3, r: 0.07 });
+    sb.add('skin', geo('farm', () => lathe([[0.001, 0.04], [0.042, 0.03], [0.048, 0], [0.051, -0.07], [0.041, -0.18], [0.033, -0.25], [0.001, -0.26]])), armCol, el, { parent: sh, child: wr, len: 0.25, r: 0.05, full: true });
+    sb.add('skin', geo('hand', () => new THREE.SphereGeometry(0.05, 12, 10)), skinCol, wr, { y: -0.05, z: 0.01, sx: 0.75, sy: 1.35, sz: 0.5 });
+    sb.add('skin', geo('thumb', () => new THREE.CapsuleGeometry(0.014, 0.04, 3, 6)), skinCol, wr, { x: side * -0.02, y: -0.035, z: 0.035 });
   });
   sb.build(root, skel, mats);
 
@@ -222,7 +225,7 @@ export function makePlayerMesh(team, idx, number, scale, skinIdx, opts = {}) {
   headG.add(merged(hp));
   if (opts.pom) for (const a of arms) { // 彩球
     const pm = new THREE.Mesh(geo('pom', () => new THREE.IcosahedronGeometry(0.11, 1)), new THREE.MeshStandardMaterial({ color: opts.pom, roughness: 0.35, metalness: 0.5, flatShading: true }));
-    pm.position.set(0, -0.33, 0.01); a.el.add(pm);
+    pm.position.set(0, -0.08, 0.01); a.wr.add(pm);
   }
   if (opts.mascot) { // 吉祥物：原創的大頭熊，頭套蓋住原本的頭
     headG.children.forEach(c => { c.visible = false; });
@@ -243,8 +246,8 @@ export function makePlayerMesh(team, idx, number, scale, skinIdx, opts = {}) {
   }
 
   root.scale.setScalar(scale);
-  const r = { root, body, hips, torso, headG, legL: legs[0], legR: legs[1], armL: arms[0], armR: arms[1], mats };
-  r.joints = [legs[0].hip, legs[0].knee, legs[1].hip, legs[1].knee, arms[0].sh, arms[0].el, arms[1].sh, arms[1].el, torso, headG];
+  const r = { root, body, hips, torso, chest, neck, headG, legL: legs[0], legR: legs[1], armL: arms[0], armR: arms[1], mats };
+  r.joints = [legs[0].hip, legs[0].knee, legs[1].hip, legs[1].knee, arms[0].sh, arms[0].el, arms[1].sh, arms[1].el, torso, headG, chest, neck, legs[0].ankle, legs[1].ankle, arms[0].wr, arms[1].wr];
   return r;
 }
 
@@ -265,8 +268,8 @@ export function makeReflection(rig, scene) {
 const _hv = new THREE.Vector3();
 // 手掌在世界座標的位置（運球時讓球真的碰到手）
 export function handWorld(rig, right) {
-  const el = right ? rig.armR.el : rig.armL.el;
-  return el.localToWorld(_hv.set(0, -0.3, 0.01)).clone();
+  const wr = right ? rig.armR.wr : rig.armL.wr;
+  return wr.localToWorld(_hv.set(0, -0.05, 0.01)).clone();
 }
 
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -293,7 +296,7 @@ export function animatePlayer(p, dt) {
     kneeL: 0.16 + Math.max(0, Math.sin(ph + 1.3)) * amp * 1.5, kneeR: 0.16 + Math.max(0, Math.sin(ph + 1.3 + Math.PI)) * amp * 1.5,
     hipLz: 0, hipRz: 0,
     shLx: Math.sin(ph) * sw * 0.8, shRx: -Math.sin(ph) * sw * 0.8, shLz: 0.1, shRz: -0.1, elL: -0.3 - sw * 0.9, elR: -0.3 - sw * 0.9,
-    lean: sw * 0.16 + Math.max(-1, Math.min(1, p.accLean || 0)) * 0.15, head: 0, bodyY: null, twist: 0 };
+    lean: sw * 0.16 + Math.max(-1, Math.min(1, p.accLean || 0)) * 0.3, head: 0, bodyY: null, twist: 0, wrL: 0.15, wrR: 0.15, ankL: null, ankR: null, look: true };
   if (shuffle) { const o = Math.abs(Math.sin(ph)) * 0.32, s = Math.sign(lat); P.hipLz = s > 0 ? o : 0.08; P.hipRz = s > 0 ? -0.08 : -o; P.kneeL = 0.55; P.kneeR = 0.55; }
   const mode = p.pose;
   const H = p.hand || 1;
@@ -327,12 +330,34 @@ export function animatePlayer(p, dt) {
     P.shLx = -0.95; P.shRx = -0.95; P.elL = -1.0; P.elR = -1.0; P.shLz = -0.25; P.shRz = 0.25;
   } else if (mode === 'ftset') {
     P.shLx = -0.8; P.shRx = -0.8; P.elL = -1.3; P.elR = -1.3; P.shLz = -0.2; P.shRz = 0.2; P.kneeL += 0.2; P.kneeR += 0.2;
-  } else if (mode === 'shoot') {
-    P.shLx = -2.5; P.shRx = -2.75; P.elL = -1.0; P.elR = -1.45; P.shLz = -0.35; P.shRz = 0.12; P.lean = p.fade ? -0.3 : -0.04;
+  } else if (mode === 'shoot') { // 跳投分段：下蹲收球 → 起跳舉到出手點（手腕後扣）→ 出手後手臂伸直、手腕下壓
+    const t = p.actT || 0; P.look = false;
+    if (p.released) { P.shRx = -2.95; P.elR = -0.05; P.wrR = -1.05; P.shRz = 0.05; P.shLx = -2.35; P.elL = -0.45; P.shLz = -0.5; P.wrL = -0.2; }
+    else if (!air) { const u = Math.min(1, t / 0.13); P.kneeL = P.kneeR = 0.2 + 0.7 * u; P.hipL = P.hipR = -0.15 - 0.35 * u; P.lean = 0.18 * u; P.shRx = -1.15; P.elR = -1.75; P.wrR = 0.6; P.shLx = -1.05; P.elL = -1.55; P.shLz = -0.35; P.shRz = 0.1; P.head = -0.1; }
+    else { P.shRx = -2.6; P.elR = -1.55; P.wrR = 0.95; P.shRz = 0.1; P.shLx = -2.25; P.elL = -1.25; P.shLz = -0.5; P.wrL = 0.2; }
+    if (air) { P.hipL = -0.12; P.hipR = -0.05; P.kneeL = 0.12; P.kneeR = 0.08; P.lean = p.fade ? -0.32 : -0.05; }
   } else if (mode === 'follow') {
     P.shLx = -2.55; P.shRx = -2.95; P.elL = -0.45; P.elR = -0.05; P.shLz = 0.05; P.shRz = 0; P.lean = p.fade ? -0.3 : -0.05;
-  } else if (mode === 'layup') {
-    P.shRx = -3.05; P.elR = -0.1; P.shLx = -1.3; P.elL = -0.6; P.hipL = -1.25; P.kneeL = 1.35; P.hipR = 0.15; P.kneeR = 0.3; P.lean = 0;
+  } else if (mode === 'layup') { // 上升時雙手護球到下巴，接近最高點單手伸出、手腕輕挑
+    const up = (p.jv || 0) > 1.6 && !p.released; P.look = false;
+    if (up) { P.shRx = P.shLx = -1.9; P.elR = P.elL = -1.3; P.shRz = 0.25; P.shLz = -0.25; P.wrR = 0.5; }
+    else { P.shRx = -3.05; P.elR = -0.1; P.wrR = p.released ? -0.6 : 0.4; P.shLx = -1.3; P.elL = -0.6; }
+    P.hipL = -1.25; P.kneeL = 1.35; P.hipR = 0.15; P.kneeR = 0.3; P.lean = 0; P.ankR = 0.7;
+  } else if (mode === 'gather') { // 上籃前兩步：大步收球，球在身側
+    const u = Math.min(1, (p.actT || 0) / 0.22), s2 = u < 0.5 ? 1 : -1;
+    P.hipL = s2 > 0 ? -0.95 : 0.45; P.hipR = s2 > 0 ? 0.45 : -0.95; P.kneeL = s2 > 0 ? 0.55 : 0.9; P.kneeR = s2 > 0 ? 0.9 : 0.55;
+    P.shRx = P.shLx = -0.95; P.elR = P.elL = -1.35; P.shRz = -0.2; P.shLz = 0.45; P.lean = 0.3; P.bodyY = -0.1;
+  } else if (mode === 'catch') { // 接球：雙手往前伸、手掌張開對著球
+    P.shRx = P.shLx = -1.45; P.elR = P.elL = -0.45; P.shRz = 0.18; P.shLz = -0.18; P.wrR = P.wrL = 0.5; P.kneeL += 0.15; P.kneeR += 0.15;
+  } else if (mode === 'tired') { // 累了：雙手扶膝、彎腰喘氣
+    const br = Math.sin(performance.now() * 0.006 + p.runPhase) * 0.04;
+    P.hipL = P.hipR = -0.55; P.kneeL = P.kneeR = 0.55; P.lean = 0.75 + br; P.shRx = P.shLx = -0.75; P.elR = P.elL = -0.25; P.shRz = -0.12; P.shLz = 0.12; P.head = -0.5; P.look = false;
+  } else if (mode === 'passC' || mode === 'passB' || mode === 'passO' || mode === 'passQ') { // 傳球種類
+    const u = Math.min(1, (p.actT || 0) / 0.18); P.look = false;
+    if (mode === 'passC') { P.shRx = P.shLx = -1.25 - u * 0.25; P.elR = P.elL = -1.4 + u * 1.3; P.shRz = 0.25 - u * 0.1; P.shLz = -0.25 + u * 0.1; P.wrR = P.wrL = -0.9 * u + 0.5 * (1 - u); P.lean = 0.12 + u * 0.1; P.hipL = -0.45; P.hipR = 0.2; P.kneeL = 0.4; } // 胸前推傳、跨一步
+    else if (mode === 'passB') { P.shRx = P.shLx = -1.1 + u * 0.5; P.elR = P.elL = -1.3 + u * 1.2; P.shRz = 0.25; P.shLz = -0.25; P.wrR = P.wrL = -0.9 * u; P.lean = 0.3; P.kneeL = P.kneeR = 0.55; P.bodyY = -0.08; } // 地板傳球：壓低往下推
+    else if (mode === 'passO') { P.shRx = P.shLx = -3.0 + u * 0.6; P.elR = P.elL = -1.5 + u * 1.4; P.shRz = 0.15; P.shLz = -0.15; P.wrR = P.wrL = -1.0 * u + 0.6 * (1 - u); P.lean = -0.1 + u * 0.25; } // 過頂傳球
+    else { const H2 = p.hand || 1; setArm(H2, -1.0 - u * 0.5, -0.1 + u * 0.4, -1.2 + u * 1.15); if (H2 > 0) P.wrR = -0.9 * u; else P.wrL = -0.9 * u; setArm(-H2, -0.5, 0.25, -0.8); P.lean = 0.15; } // 單手快傳（側推）
   } else if (mode === 'euro') {
     setArm(1, -0.95, -0.2, -1.0); setArm(-1, -0.95, -0.2, -1.0); P.lean = 0.3; P.hipL *= 1.4; P.hipR *= 1.4; P.kneeL += 0.3; P.kneeR += 0.3;
   } else if (mode === 'dunk') {
@@ -391,8 +416,20 @@ export function animatePlayer(p, dt) {
     P.shRx = P.shLx = up ? -2.7 : -0.7; P.elR = P.elL = up ? -0.3 : -1.3; P.shRz = up ? 0.5 * (p.hand || 1) : 0.3; P.shLz = up ? 0.5 * (p.hand || 1) : -0.3;
     P.hipL = -1.0; P.kneeL = 1.4; P.hipR = -0.4; P.kneeR = 0.9; P.lean = up ? -0.05 : 0.25;
   }
-  if (air && !['layup', 'dunk', 'hang', 'clutch', 'windmill'].includes(mode)) { P.kneeL = 0.75; P.kneeR = 0.65; P.hipL = -0.3; P.hipR = -0.2; P.hipLz = 0; P.hipRz = 0; }
-  if (p.landT > 0) { const q = p.landT / 0.15; P.kneeL += 0.6 * q; P.kneeR += 0.6 * q; P.hipL -= 0.3 * q; P.hipR -= 0.3 * q; }
+  // 空中腿部依階段變化：上升時伸直、腳尖下壓；最高點收腿；下降時伸腿準備落地
+  if (air && !['layup', 'dunk', 'hang', 'clutch', 'windmill', 'shoot'].includes(mode)) {
+    const jv = p.jv || 0;
+    if (jv > 1.2) { P.kneeL = 0.15; P.kneeR = 0.25; P.hipL = -0.1; P.hipR = -0.2; }
+    else if (jv > -1.0) { P.kneeL = 0.75; P.kneeR = 0.6; P.hipL = -0.45; P.hipR = -0.3; }
+    else { P.kneeL = 0.3; P.kneeR = 0.35; P.hipL = -0.2; P.hipR = -0.15; }
+    P.hipLz = 0; P.hipRz = 0;
+  }
+  if (p.landT > 0) { const q = p.landT / 0.2; P.kneeL += 0.85 * q; P.kneeR += 0.85 * q; P.hipL -= 0.45 * q; P.hipR -= 0.45 * q; P.lean += 0.15 * q; }
+  // 腳踝：站地上時讓腳掌貼平地面；空中時腳尖往下；跑步後腳蹬地
+  const flat = leg => leg === 'legL' ? -(P.hipL + P.kneeL) : -(P.hipR + P.kneeR);
+  const airToe = air ? 0.55 : 0;
+  const pushL = !air && spd > 1 ? Math.max(0, Math.sin(ph + 0.6)) * 0.45 * sw : 0, pushR = !air && spd > 1 ? Math.max(0, Math.sin(ph + 0.6 + Math.PI)) * 0.45 * sw : 0;
+  const ankL = P.ankL !== null ? P.ankL : flat('legL') + airToe + pushL, ankR = P.ankR !== null ? P.ankR : flat('legR') + airToe + pushR;
   r.legL.hip.rotation.x = lerp(r.legL.hip.rotation.x, P.hipL, k);
   r.legR.hip.rotation.x = lerp(r.legR.hip.rotation.x, P.hipR, k);
   r.legL.hip.rotation.z = lerp(r.legL.hip.rotation.z, P.hipLz, k);
@@ -405,10 +442,29 @@ export function animatePlayer(p, dt) {
   r.armR.sh.rotation.z = lerp(r.armR.sh.rotation.z, P.shRz, k);
   r.armL.el.rotation.x = lerp(r.armL.el.rotation.x, P.elL, k);
   r.armR.el.rotation.x = lerp(r.armR.el.rotation.x, P.elR, k);
-  r.torso.rotation.x = lerp(r.torso.rotation.x, P.lean, k);
-  // 跑步時上半身微微扭轉
-  r.torso.rotation.y = lerp(r.torso.rotation.y, air || shuffle ? 0 : Math.sin(ph) * sw * 0.12, k);
-  r.headG.rotation.x = lerp(r.headG.rotation.x, -P.lean * 0.6 + P.head, k);
+  r.legL.ankle.rotation.x = lerp(r.legL.ankle.rotation.x, ankL, k);
+  r.legR.ankle.rotation.x = lerp(r.legR.ankle.rotation.x, ankR, k);
+  r.armL.wr.rotation.x = lerp(r.armL.wr.rotation.x, P.wrL, k);
+  r.armR.wr.rotation.x = lerp(r.armR.wr.rotation.x, P.wrR, k);
+  // 前傾分給腰和胸；跑步時骨盆和肩膀反向扭轉
+  r.torso.rotation.x = lerp(r.torso.rotation.x, P.lean * 0.55, k);
+  r.chest.rotation.x = lerp(r.chest.rotation.x, P.lean * 0.45, k);
+  const tw = air || shuffle ? 0 : Math.sin(ph) * sw * 0.14;
+  r.torso.rotation.y = lerp(r.torso.rotation.y, -tw * 0.5, k);
+  r.chest.rotation.y = lerp(r.chest.rotation.y, tw * 1.5, k);
+  // 頭：抵銷前傾、再轉向要看的東西（球）；脖子分一半
+  let yaw = 0, pitch = 0;
+  if (P.look && p.lookAt) {
+    const dx = p.lookAt.x - p.pos.x, dz = p.lookAt.z - p.pos.z;
+    let a = Math.atan2(dx, dz) - p.facing; a = Math.atan2(Math.sin(a), Math.cos(a));
+    yaw = Math.max(-1.25, Math.min(1.25, a)); if (Math.abs(a) > 2.2) yaw *= 0.4;
+    pitch = Math.max(-0.5, Math.min(0.4, -Math.atan2(p.lookAt.y - 1.7 * p.scale - p.jy, Math.hypot(dx, dz) + 0.3) * 0.7));
+  }
+  const kh = Math.min(1, k * 0.6);
+  r.neck.rotation.y = lerp(r.neck.rotation.y, yaw * 0.45, kh);
+  r.headG.rotation.y = lerp(r.headG.rotation.y, yaw * 0.55, kh);
+  r.neck.rotation.x = lerp(r.neck.rotation.x, (-P.lean * 0.6 + P.head) * 0.4 + pitch * 0.4, k);
+  r.headG.rotation.x = lerp(r.headG.rotation.x, (-P.lean * 0.6 + P.head) * 0.6 + pitch * 0.6, k);
   if (P.bodyY !== null) r.body.position.y = lerp(r.body.position.y, P.bodyY, k);
   else {
     const kneeAvg = (r.legL.knee.rotation.x + r.legR.knee.rotation.x) / 2;
