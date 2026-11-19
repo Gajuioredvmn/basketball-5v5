@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#07090f">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="5v5 籃球">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<title>全場 5v5 籃球</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html,body{margin:0;height:100%;overflow:hidden;background:#07090f;color:#fff;font-family:-apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;touch-action:none;overscroll-behavior:none}
+#game,#game canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.ov{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;z-index:20}
+.ov.show{display:flex}
+#title{background:radial-gradient(ellipse at center,rgba(10,14,30,.55),rgba(5,7,14,.92))}
+#title h1{margin:0;font-size:min(7vw,44px);letter-spacing:.06em;font-weight:900;text-shadow:0 4px 0 #b3261e,0 8px 24px rgba(0,0,0,.6)}
+#title h1 span{color:#ff8a1f}
+#title p.sub{margin:.1em 0 .5em;opacity:.8;font-size:13px}
+#title{justify-content:flex-start;overflow-y:auto;padding:max(10px,env(safe-area-inset-top)) 10px 14px}
+#title>*{flex-shrink:0}
+#title .opt{margin:3px 0}#title .opt button{padding:5px 13px;font-size:13px}#title .opt button.sw{width:26px;height:26px;padding:0}
+#title .big{margin-top:6px;padding:9px 40px;font-size:18px}
+#helpBox{display:none;max-width:760px}#helpBox.show{display:block}
+.opt{display:flex;gap:8px;align-items:center;margin:6px 0;font-size:14px}
+.opt label{width:72px;text-align:right;opacity:.8}
+.opt button{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:999px;padding:7px 16px;font-size:14px}
+.opt button.on{background:#ff8a1f;border-color:#ff8a1f;color:#1a0d00;font-weight:700}
+.big{margin-top:16px;background:linear-gradient(#ff9a3a,#e8650f);border:0;color:#fff;font-size:20px;font-weight:800;padding:12px 48px;border-radius:14px;box-shadow:0 6px 0 #a3420a;letter-spacing:.1em}
+.big:active{transform:translateY(3px);box-shadow:0 3px 0 #a3420a}
+.help{margin-top:14px;font-size:12px;opacity:.65;text-align:center;line-height:1.7}
+#hud{position:fixed;inset:0;display:none;z-index:10;pointer-events:none}
+#hud.show{display:block}
+#board{position:absolute;top:max(6px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:flex;align-items:stretch;background:rgba(8,10,18,.82);border-radius:10px;overflow:hidden;font-weight:800;box-shadow:0 2px 10px rgba(0,0,0,.5);font-variant-numeric:tabular-nums}
+#board .tm{display:flex;align-items:center}
+#board .t0{background:#c62828}#board .t1{background:#1d3f91}
+#board .sc{font-size:22px;min-width:30px;text-align:center}
+#board .mid{padding:3px 12px;display:flex;align-items:center;gap:10px;font-size:15px}
+#sc{color:#ffcf3a;min-width:22px;text-align:center}#sc.warn{color:#ff4a3a}
+#qtr{opacity:.8}
+#pbtn{position:absolute;pointer-events:auto;top:max(8px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:16px}
+#msg{position:absolute;top:26%;left:50%;transform:translate(-50%,-50%) scale(.8);font-size:30px;font-weight:900;opacity:0;transition:opacity .2s,transform .2s;text-shadow:0 3px 12px rgba(0,0,0,.7);white-space:nowrap}
+#msg.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+#msg.big{font-size:44px;color:#ffd34d}#msg.away{color:#9fc3ff}
+#slabel{position:absolute;transform:translate(-50%,-100%);font-weight:900;font-size:16px;opacity:0;transition:opacity .15s;text-shadow:0 2px 6px #000;white-space:nowrap}
+#slabel.show{opacity:1}#slabel.good{color:#5dff7a}
+#meter{position:absolute;display:none;width:12px;height:70px;border-radius:6px;background:rgba(0,0,0,.55);border:2px solid #fff;overflow:hidden}
+#meter .zone{position:absolute;left:0;right:0;bottom:84%;height:14%;background:rgba(80,255,120,.55)}
+#mfill{position:absolute;left:0;right:0;bottom:0;background:#ffd34d}
+#pad{position:fixed;inset:0;z-index:9;display:none}
+#hud.show~#pad{display:block}
+#joy{position:fixed;width:120px;height:120px;border-radius:50%;border:2px solid rgba(255,255,255,.35);background:rgba(255,255,255,.06);left:calc(max(20px,env(safe-area-inset-left)) + 10px);bottom:30px;pointer-events:none;opacity:.55}
+#joy.on{opacity:1;bottom:auto}
+#knob{position:absolute;left:35px;top:35px;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.75)}
+.btn{position:fixed;z-index:11;border-radius:50%;border:2px solid rgba(255,255,255,.55);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;flex-direction:column;font-size:16px;pointer-events:auto;touch-action:none}
+.btn.pressed{transform:scale(.92);filter:brightness(1.3)}
+#b1{width:88px;height:88px;right:calc(max(18px,env(safe-area-inset-right)) + 8px);bottom:26px;background:rgba(230,100,20,.75);font-size:20px}
+#b1 small{font-size:9px;font-weight:600;opacity:.85}
+#b2{width:64px;height:64px;right:calc(max(18px,env(safe-area-inset-right)) + 112px);bottom:22px;background:rgba(40,120,220,.7)}
+#b3{width:60px;height:60px;right:calc(max(18px,env(safe-area-inset-right)) + 22px);bottom:128px;background:rgba(60,170,80,.7);font-size:15px}
+#b4{width:56px;height:56px;right:calc(max(18px,env(safe-area-inset-right)) + 100px);bottom:100px;background:rgba(140,80,200,.7);font-size:15px}
+.btns{display:none}#hud.show~.btns{display:block}
+#brk,#pause{background:rgba(5,7,14,.82)}
+#brk h2,#pause h2{margin:0 0 4px;font-size:32px}
+#brkSub{opacity:.85;margin-bottom:10px}
+table{border-collapse:collapse;font-size:14px;margin:6px 0}
+td,th{padding:3px 14px;text-align:center}th{opacity:.6;font-weight:600}
+td.t0{color:#ff6b5e;font-weight:800}td.t1{color:#7aa7ff;font-weight:800}
+#pause .big{margin-top:10px;padding:10px 36px;font-size:17px}
+.sm{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:9px 26px;font-size:15px;margin-top:10px}
+#rot{position:fixed;inset:0;background:#07090f;z-index:50;display:none;align-items:center;justify-content:center;flex-direction:column;font-size:18px;text-align:center}
+#rot .ph{width:46px;height:78px;border:4px solid #fff;border-radius:10px;margin-bottom:18px;animation:rr 1.8s infinite}
+@keyframes rr{0%,20%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
+
+#board{align-items:stretch}
+#board .tm{flex-wrap:wrap;padding:4px 10px 3px;gap:2px 8px;min-width:118px}
+#board .t0{justify-content:flex-end}
+#board .nm{font-size:14px;display:flex;align-items:center;gap:3px}
+#board .sub{flex-basis:100%;display:flex;gap:6px;font-size:9.5px;font-weight:600;opacity:.92;justify-content:center;white-space:nowrap}
+#board .to{letter-spacing:-1px;opacity:.8}
+.bn{background:#ffd34d;color:#2a1a00;border-radius:3px;padding:0 3px;visibility:hidden}
+.poss{color:#ffd34d;font-size:10px;visibility:hidden}
+#l3{position:absolute;left:50%;bottom:calc(8px + env(safe-area-inset-bottom));transform:translate(-50%,20px);opacity:0;transition:.3s;background:linear-gradient(90deg,rgba(8,10,18,.92),rgba(20,26,48,.92));padding:6px 16px;border-radius:6px;font-size:13px;white-space:nowrap;border-left:4px solid #ffd34d}
+#l3.show{opacity:1;transform:translate(-50%,0)}
+#l3 b{font-size:15px}#l3 .c0{color:#ff7a6e}#l3 .c1{color:#8fb3ff}
+#replayTag{position:absolute;top:calc(14% + 4px);left:calc(max(16px,env(safe-area-inset-left)) + 6px);display:none;font-weight:900;color:#ff4a3a;font-size:15px;letter-spacing:.06em;text-shadow:0 2px 6px #000}
+#replayTag small{color:#fff;font-weight:600;font-size:11px;opacity:.8}
+#letterbox{position:fixed;inset:0;pointer-events:none;z-index:5}
+#letterbox.on::before,#letterbox.on::after{content:"";position:absolute;left:0;right:0;height:12%;background:#000}
+#letterbox.on::before{top:0}#letterbox.on::after{bottom:0}
+#letterbox.on~#hud #board{opacity:.0}
+#intro{position:fixed;inset:0;z-index:15;display:none;align-items:center;justify-content:center;pointer-events:none;flex-direction:column}
+#intro.show{display:flex}
+#introCard{display:flex;align-items:center;gap:22px;animation:inC .5s ease-out}
+@keyframes inC{from{opacity:0;transform:translateY(20px)}}
+.lu{background:rgba(8,10,18,.86);border-radius:10px;padding:10px 16px;min-width:200px}
+.lu h3{margin:0 0 6px;font-size:16px}.lu.c0 h3{color:#ff7a6e}.lu.c1 h3{color:#8fb3ff}
+.lu div{display:flex;gap:10px;align-items:baseline;font-size:14px;padding:2px 0}
+.lu b{width:38px}.lu span{width:28px;opacity:.85}.lu small{opacity:.7}
+.vs{font-size:34px;font-weight:900;color:#ffd34d;text-shadow:0 3px 10px #000}
+.skip{margin-top:10px;font-size:12px;opacity:.7}
+#subp{background:rgba(5,7,14,.92);padding:10px}
+#subp h2{font-size:22px;margin:0 0 6px}
+.subcols{display:flex;gap:16px}
+.subcols h4{margin:0 0 4px;font-size:12px;opacity:.7}
+.pl{display:flex;align-items:center;gap:6px;width:250px;margin:3px 0;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.07);color:#fff;font-size:13px;text-align:left}
+.pl b{width:34px}.pl small{opacity:.75;margin-left:auto}
+.pl.sel{border-color:#ffd34d;background:rgba(255,211,77,.18)}.pl.q{border-color:#5ec8ff}.pl.out{opacity:.35}
+.bar{width:60px;height:6px;background:rgba(255,255,255,.15);border-radius:3px;overflow:hidden;display:inline-block}.bar i{display:block;height:100%}
+.row{display:flex;gap:12px;align-items:center}
+.note{font-size:11px;opacity:.65;margin:4px 0}
+.tabs{display:flex;gap:6px;justify-content:center;margin-bottom:6px}
+.tabs button{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:999px;padding:5px 14px;font-size:13px}
+.tabs button.on{background:#ff8a1f;border-color:#ff8a1f;color:#1a0d00;font-weight:700}
+.box{max-height:46vh;overflow:auto}
+table.ps{font-size:12px}table.ps td,table.ps th{padding:3px 7px}
+#brk h2{font-size:26px}
+#callTO:disabled{opacity:.35}
+body.cine .btns,body.cine #joy{display:none!important}
+#tbtn{position:absolute;pointer-events:auto;top:max(8px,env(safe-area-inset-top));left:max(12px,env(safe-area-inset-left));height:34px;padding:0 12px;border-radius:17px;background:rgba(8,10,18,.75);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:12px;font-weight:700}
+#tac{position:absolute;pointer-events:auto;top:calc(max(8px,env(safe-area-inset-top)) + 40px);left:max(12px,env(safe-area-inset-left));background:rgba(8,10,18,.9);border-radius:10px;padding:8px 10px;display:none;z-index:12}
+#tac.show{display:block}
+.trow{display:flex;align-items:center;gap:8px;margin:4px 0}.trow span{font-size:12px;opacity:.7;width:28px}
+.trow button,.tclose{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:999px;padding:6px 11px;font-size:12px;margin-right:4px}
+.trow button.on{background:#ff8a1f;border-color:#ff8a1f;color:#1a0d00;font-weight:700}
+.tclose{margin-top:4px}
+body.cine #tbtn,body.cine #tac{display:none}
+
+.opt button.sw{width:30px;height:30px;padding:0;border-radius:50%;border:2px solid rgba(255,255,255,.35)}
+.opt button.sw.on{border:3px solid #fff;box-shadow:0 0 0 2px #ff8a1f}
+.opt button.sw:disabled{opacity:.2}
+#title .opt label{width:72px}
+#pbp{position:absolute;top:calc(max(6px,env(safe-area-inset-top)) + 58px);left:50%;transform:translateX(-50%);font-size:12px;background:rgba(8,10,18,.72);padding:3px 12px;border-radius:12px;opacity:0;transition:opacity .3s;white-space:nowrap}
+#pbp.show{opacity:1}
+#clutch{position:absolute;top:calc(max(6px,env(safe-area-inset-top)) + 2px);left:calc(50% + 205px);display:none;background:#d32f2f;color:#fff;font-weight:900;font-size:12px;padding:4px 9px;border-radius:6px;animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.55}}
+#chud{position:absolute;top:max(8px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:none;background:rgba(8,10,18,.85);padding:6px 16px;border-radius:10px;font-size:14px;text-align:center;white-space:nowrap}
+#chud b{font-size:17px;color:#ffd34d}#chud b.warn{color:#ff4a3a}#chud div{font-size:12px;margin-top:3px}
+.rk{display:inline-flex;gap:2px;margin:0 5px}.rk i{width:9px;height:9px;border-radius:50%;background:#ff8a1f;display:inline-block}.rk i.money{background:linear-gradient(90deg,#c62828,#fff,#1d3f91)}.rk i.used{opacity:.2}
+body.solo3 #b3,body.solo3 #b4,body.solo3 #pad{display:none!important}
+body.solo #board,body.solo #tbtn,body.solo #tac,body.solo #b2{display:none!important}
+#judges{position:absolute;top:22%;left:50%;transform:translateX(-50%) scale(.9);opacity:0;transition:.3s;text-align:center;pointer-events:none}
+#judges.show{opacity:1;transform:translateX(-50%) scale(1)}
+#judges .jt{font-size:22px;font-weight:900;text-shadow:0 2px 8px #000}
+#judges .jc{display:flex;gap:8px;justify-content:center;margin:8px 0}
+#judges .jc b{width:44px;height:54px;display:flex;align-items:center;justify-content:center;background:#fff;color:#111;font-size:28px;font-weight:900;border-radius:6px}
+#judges .jc b.ten{background:#ffd34d}
+#judges .js{font-size:24px;font-weight:900;color:#ffd34d;text-shadow:0 2px 8px #000}
+#setp{background:rgba(5,7,14,.94)}
+#setp .opt label{width:80px}
+.btn{transform:scale(var(--bs,1));transform-origin:center}
+.btn.pressed{transform:scale(calc(var(--bs,1) * .92))}
+body.edit .btn{outline:2px dashed #ffd34d;outline-offset:3px}
+#editDone{position:absolute;pointer-events:auto;top:40%;left:50%;transform:translateX(-50%);display:none;z-index:30;background:#ffd34d;color:#1a0d00;border:0;border-radius:10px;padding:10px 26px;font-weight:800;font-size:16px}
+body.edit #editDone{display:block}
+#l3 .c0{color:var(--c0,#ff7a6e)}#l3 .c1{color:var(--c1,#8fb3ff)}
+#brkSub{white-space:pre-line;text-align:center}
+#fsbtn{position:absolute;pointer-events:auto;top:max(8px,env(safe-area-inset-top));right:calc(max(12px,env(safe-area-inset-right)) + 48px);width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:18px}
+#fstip{background:rgba(5,7,14,.94);padding:16px}
+.fstext{max-width:560px;font-size:15px;line-height:1.75;text-align:left}
+.fstext b{color:#ffd34d}
+body.fs #fsbtn{display:none}
+@media (orientation:portrait) and (pointer:coarse){#rot{display:flex}}
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="letterbox"></div>
+<div id="hud">
+  <div id="board">
+    <div class="tm t0"><div class="nm"><span id="poss0" class="poss">◀</span><span id="tn0">紅隊</span></div><span class="sc" id="s0">0</span><div class="sub"><span id="f0">犯規 0</span><span id="bn0" class="bn">加罰</span><span id="to0" class="to"></span></div></div>
+    <div class="mid"><span id="qtr">1ST</span><span id="clk">3:00</span><span id="sc">24</span></div>
+    <div class="tm t1"><span class="sc" id="s1">0</span><div class="nm"><span id="tn1">藍隊</span><span id="poss1" class="poss">▶</span></div><div class="sub"><span id="bn1" class="bn">加罰</span><span id="f1">犯規 0</span><span id="to1" class="to"></span></div></div>
+  </div>
+  <button id="pbtn">❚❚</button>
+  <button id="fsbtn" title="全螢幕">⛶</button>
+  <button id="tbtn">戰術</button>
+  <div id="tac"><div class="trow"><span>進攻</span><div id="tacO"></div></div><div class="trow"><span>防守</span><div id="tacD"></div></div><button data-k="x" class="tclose">關閉</button></div>
+  <div id="msg"></div>
+  <div id="slabel"></div>
+  <div id="l3"></div>
+  <div id="pbp"></div>
+  <div id="clutch">關鍵時刻</div>
+  <div id="chud"></div>
+  <div id="judges"></div>
+  <button id="editDone">完成</button>
+  <div id="replayTag">● 精彩重播　<small>點一下跳過</small></div>
+  <div id="meter"><div id="mfill"></div><div class="zone"></div></div>
+</div>
+<div id="pad"><div id="joy"><div id="knob"></div></div></div>
+<div class="btns">
+  <div class="btn" id="b1">投籃<small>按住·最高點放開</small></div>
+  <div class="btn" id="b2">傳球</div>
+  <div class="btn" id="b3">加速</div>
+  <div class="btn" id="b4">換人</div>
+</div>
+<div id="title" class="ov show">
+  <h1>全場 <span>5v5</span> 籃球</h1>
+  <p class="sub">NBA 規格場地</p>
+  <div class="opt" data-k="m"><label>模式</label><button data-v="game" class="on">單場比賽</button><button data-v="series">季後賽搶四</button><button data-v="three">三分大賽</button><button data-v="dunk">灌籃大賽</button></div>
+  <div class="opt" data-k="c0"><label>我的球隊</label></div>
+  <div class="opt" data-k="c1"><label>對手</label></div>
+  <div class="opt" data-k="q"><label>每節</label><button data-v="2">2 分鐘</button><button data-v="3" class="on">3 分鐘</button><button data-v="5">5 分鐘</button></div>
+  <div class="opt" data-k="d"><label>難度</label><button data-v="0">簡單</button><button data-v="1" class="on">普通</button><button data-v="2">困難</button></div>
+  <div class="row"><button class="big" id="start">開始比賽</button><button class="sm" id="setBtn">設定</button><button class="sm" id="fsBtn2">全螢幕</button></div>
+  <button class="sm" id="helpBtn" style="margin-top:6px;padding:5px 16px;font-size:12px">操作說明</button>
+  <div id="helpBox"><div class="help">左手：拖曳移動　投籃：按住、跳到最高點放開（搖桿往後拉＝後仰跳投；切入時搖桿往側邊＝歐洲步）　傳球：搖桿指向隊友（傳給切入籃下的隊友＝空中接力）<br>招式：搖桿往側邊＝胯下、斜後＝背後運球、往後＝後撤步、往前＝猶豫步、不推＝轉身；籃下 4.5 公尺內按「背打」背身單打，再按「腳步」＝夢幻腳步，背打時投籃＝勾射（搖桿往側邊）或轉身後仰　｜　左上「戰術」切換進攻戰術與防守方式　｜　防守：跳＝封阻・搶籃板　抄截　換人　｜　右上 ❚❚：暫停、換人、數據</div></div>
+</div>
+<div id="brk" class="ov"><h2 id="brkTitle"></h2><div id="brkSub"></div><div id="brkStats"></div><div class="row"><button class="big" id="brkBtn">繼續</button><button class="sm" id="brkBtn2" style="display:none">回主畫面</button></div></div>
+<div id="pause" class="ov"><h2>暫停</h2><button class="big" id="resume">繼續比賽</button><button class="sm" id="callTO">叫暫停</button><button class="sm" id="lineup">陣容與換人</button><button class="sm" id="boxBtn">比賽數據</button><button class="sm" id="mute">音效：開</button><button class="sm" id="setBtn2">設定</button><button class="sm" id="restart">重新開始</button><button class="sm" id="quit">回主畫面</button></div>
+<div id="subp" class="ov"><h2 id="subTitle">陣容與換人</h2>
+  <div class="subcols"><div><h4>場上</h4><div id="subCourt"></div></div><div><h4>板凳</h4><div id="subBench"></div></div></div>
+  <div id="subQ" class="note"></div>
+  <div class="row"><button class="sm" id="autoSub">電腦自動換人：開</button><button class="big" id="subGo">回到比賽</button></div>
+</div>
+<div id="intro"><div id="introCard"></div><div class="skip">點一下跳過</div></div>
+<div id="setp" class="ov"><h2>設定</h2>
+  <div class="opt" data-s="size"><label>按鈕大小</label><button data-v="0.85">小</button><button data-v="1">中</button><button data-v="1.18">大</button></div>
+  <div class="opt" data-s="lefty"><label>左右手</label><button data-v="0">搖桿在左</button><button data-v="1">搖桿在右</button></div>
+  <div class="opt" data-s="vib"><label>震動</label><button data-v="1">開</button><button data-v="0">關</button></div>
+  <div class="opt" data-s="quality"><label>畫質</label><button data-v="high">高</button><button data-v="mid">中</button><button data-v="low">省電</button></div>
+  <div class="note">震動只有 Android 支援；省電會關掉地板倒影並降低解析度，重新整理後生效。</div>
+  <div class="row"><button class="sm" id="editBtn">拖曳調整按鈕位置</button><button class="sm" id="resetPos">按鈕位置還原</button><button class="big" id="setClose">完成</button></div>
+</div>
+<div id="fstip" class="ov"><h2>全螢幕</h2><div id="fsText" class="fstext"></div><button class="big" id="fsClose">知道了</button></div>
+<div id="rot"><div class="ph"></div>請把手機橫過來玩</div>
+<script>/*GAME*/</script>
+</body>
+</html>
