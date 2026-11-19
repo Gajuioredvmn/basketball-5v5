@@ -7,7 +7,7 @@ import { initAudio, sfx, setMuted } from './audio.js';
 
 const params = new URLSearchParams(location.search);
 const store = { get(k, d) { try { const v = localStorage.getItem('bb5v5.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('bb5v5.' + k, JSON.stringify(v)); } catch (e) { } } };
-const SET = Object.assign({ size: 1, lefty: false, vib: true, quality: 'high', pos: {} }, store.get('settings', {}));
+const SET = Object.assign({ voice: true, size: 1, lefty: false, vib: true, quality: 'high', pos: {} }, store.get('settings', {}));
 function buzz(ms) { if (SET.vib && navigator.vibrate) try { navigator.vibrate(ms); } catch (e) { } }
 const AUTO = params.has('auto');
 const MANUAL = params.has('manual');
@@ -115,13 +115,37 @@ function isThreeSpot(x, z, team) {
 }
 
 // ================= HUD / 訊息 =================
-function msg(text, cls = '') { (window.__log = window.__log || []).push(text); const m = $('msg'); m.textContent = text; m.className = 'show ' + cls; clearTimeout(msg.t); msg.t = setTimeout(() => m.className = '', 1500); }
+// 播報：只有「說出來的話」才有字幕，顯示在畫面最下方；其他文字一律不出現在比賽畫面上
+const VOICE = { v: null, busy: false, pri: 0 };
+function pickVoice() { try { const vs = speechSynthesis.getVoices(); VOICE.v = vs.find(v => /zh[-_]TW/i.test(v.lang)) || vs.find(v => /zh[-_](HK|Hant)/i.test(v.lang)) || vs.find(v => /^zh/i.test(v.lang)) || null; } catch (e) { } }
+if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function speakText(t) { return t.replace(/#(\d+)\s*(PG|SG|SF|PF|C)?/g, '$1號').replace(/（第 (\d+) 犯）/g, '，第 $1 次犯規').replace(/2\+1/g, '二加一').replace(/24 秒/g, '二十四秒').replace(/[　]+/g, '，'); }
+function say(text, pri = 1) {
+  (window.__log = window.__log || []).push(text);
+  if ($('title').classList.contains('show')) return;
+  if (VOICE.busy && pri < VOICE.pri) return;
+  const t = speakText(text);
+  const el = $('sub'); el.textContent = t; el.className = 'show'; clearTimeout(say.t); say.t = setTimeout(() => el.className = '', Math.max(1800, t.length * 230));
+  if (!SET.voice || muted || !('speechSynthesis' in window)) return;
+  try {
+    if (VOICE.busy) speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t); u.lang = 'zh-TW'; if (VOICE.v) u.voice = VOICE.v; u.rate = 1.12; u.pitch = 1.05; u.volume = 1;
+    u.onend = u.onerror = () => { VOICE.busy = false; VOICE.pri = 0; };
+    VOICE.busy = true; VOICE.pri = pri; speechSynthesis.speak(u);
+  } catch (e) { }
+}
+const msg = (text, cls = '') => say(text, cls === 'big' ? 2 : 1);
+const pick = a => a[(Math.random() * a.length) | 0];
 function lowerThird(p, extra) {
+  // 不再顯示字卡；得分里程碑改由播報說出來
+  if (p.st.pts >= 20 && p.st.pts % 10 < 3 && !p['said' + Math.floor(p.st.pts / 10)]) { p['said' + Math.floor(p.st.pts / 10)] = 1; setTimeout(() => say(`${p.num}號本場已經拿下 ${p.st.pts} 分`, 0), 1800); }
+  return;
   const el = $('l3'); const s = p.st;
   el.innerHTML = `<b class="c${p.team}">${tag(p)}</b> ${extra ? extra + '　' : ''}本場 <b>${s.pts}</b> 分 ${s.reb} 籃板 ${s.ast} 助攻`;
   el.className = 'show'; clearTimeout(lowerThird.t); lowerThird.t = setTimeout(() => el.className = '', 2600);
 }
 function pbp(text) {
+  return;
   const el = $('pbp'); el.textContent = `${text}　${TEAM_INFO[0].name} ${S.score[0]}:${S.score[1]} ${TEAM_INFO[1].name}`;
   el.className = 'show'; clearTimeout(pbp.t); pbp.t = setTimeout(() => el.className = '', 3600);
 }
@@ -150,7 +174,7 @@ function updateHUD() {
   $('b4').textContent = offense ? (ctrl && ctrl.post ? '腳步' : (ctrl && distB(ctrl) < 4.6 && S.fc ? '背打' : '招式')) : '換人';
   $('replayTag').style.display = S.phase === 'replay' ? 'block' : 'none';
   const clutch = S.mode !== 'three' && S.mode !== 'dunk' && S.quarter >= 4 && S.clock <= S.qlen / 4 && Math.abs(S.score[0] - S.score[1]) <= 5 && ['live', 'dead', 'inbound', 'ft'].includes(S.phase);
-  if (clutch !== S.clutch) { S.clutch = clutch; $('clutch').style.display = clutch ? 'block' : 'none'; sfx.setCrowd(clutch ? 0.17 : 0.09); if (clutch) msg('關鍵時刻', 'big'); }
+  if (clutch !== S.clutch) { S.clutch = clutch; sfx.setCrowd(clutch ? 0.17 : 0.09); if (clutch) say('比賽進入關鍵時刻！', 2); }
   if (S.mode === 'three' || S.mode === 'dunk') updateContestHUD();
 }
 
@@ -312,6 +336,15 @@ function shotProb(p, d, cd, three, kind) {
   b -= (1 - p.sta) * 0.1;
   return b;
 }
+// 甜蜜點寬度：距離越遠、防守越近、跑動中、體力越低 → 越窄；射手能力越好 → 越寬
+function shotWindow(p, d, cd, three, moving) {
+  let w = 0.075 * (three ? p.three : p.shoot);
+  w *= d < 5 ? 1.15 : d < 7.24 ? 1.0 : d < 8.6 ? 0.85 : 0.55;
+  w *= cd < 0.9 ? 0.65 : cd < 1.5 ? 0.82 : 1;
+  if (moving) w *= 0.8;
+  w *= 0.85 + 0.15 * p.sta;
+  return clamp(w, 0.025, 0.09);
+}
 function startShot(p) {
   if (p.action || p.jy > 0) return;
   const d = distB(p);
@@ -350,6 +383,10 @@ function startShot(p) {
     p.fade = isUser(p) ? (inp.mag > 0.5 && inp.x * dirB.x + inp.z * dirB.z < -0.5) : (cd < 1.2 && Math.random() < 0.35);
     p.aiRelease = 0.43 + rand(-0.06, 0.06) / D().ai;
     p.facing = Math.atan2(basketX(p.team) - p.pos.x, -p.pos.z);
+    if (isUser(p)) { // 依當下距離與防守算出甜蜜點，顯示在力道條上
+      p.win = shotWindow(p, d, cd, isThreeSpot(p.pos.x, p.pos.z, p.team), hyp(p.vel.x, p.vel.z) > 2);
+      const z = document.querySelector('#meter .zone'); z.style.bottom = ((0.91 - p.win) * 100) + '%'; z.style.height = (p.win * 200) + '%';
+    }
     notifyShot(p);
   }
 }
@@ -357,7 +394,13 @@ function startLayup(p, dunk) {
   const bx = basketX(p.team);
   const dir = new THREE.Vector3(p.pos.x - bx, 0, p.pos.z); if (dir.lengthSq() < 0.01) dir.set(-S.attack[p.team], 0, 0); dir.normalize();
   if (dir.x * S.attack[p.team] > -0.15) { dir.x = -S.attack[p.team] * 0.4; dir.normalize(); }
-  const tgt = new THREE.Vector3(bx + dir.x * (dunk ? 0.36 : 0.95), 0, dir.z * (dunk ? 0.36 : 0.95));
+  let tgt = new THREE.Vector3(bx + dir.x * (dunk ? 0.36 : 0.95), 0, dir.z * (dunk ? 0.36 : 0.95));
+  p.reverse = false;
+  if (!dunk && isUser(p) && inp.mag > 0.5 && Math.abs(p.pos.x) > HX - 3.2 && Math.sign(inp.z) === -Math.sign(p.pos.z) && Math.abs(p.pos.z) > 0.6) {
+    // 反手上籃：從籃框下穿到另一側，用籃框擋住防守者
+    p.reverse = true; tgt = new THREE.Vector3(bx - S.attack[p.team] * 0.75, 0, -Math.sign(p.pos.z) * 0.85);
+    setTimeout(() => say('反手上籃！', 1), 300);
+  }
   const v = dunk ? 5.0 : 3.9; const tApex = v / G;
   if (!jump(p, v)) return;
   p.action = dunk ? 'dunk' : 'layup'; p.actT = 0; p.released = false; p.shotKind = dunk ? 'dunk' : 'layup';
@@ -383,15 +426,17 @@ function releaseShot(p, timing) {
   const d = hyp(p.pos.x - bx, p.pos.z);
   const three = kind === 'jump' && isThreeSpot(p.pos.x, p.pos.z, p.team);
   const [nd, cd] = nearestOpp(p);
-  let prob = shotProb(p, d, kind === 'hook' ? cd * 1.6 : cd, three, kind);
+  let prob = shotProb(p, d, kind === 'hook' ? cd * 1.6 : (p.clutch ? cd * 1.5 : cd), three, kind);
   let label = '';
   if (kind === 'jump') {
     if (timing != null) {
-      if (timing >= 0.84 && timing <= 0.98) { prob += 0.25; label = '完美出手'; }
-      else if (timing >= 0.7 && timing <= 1.08) { prob += 0.06; label = timing < 0.84 ? '稍早' : '稍晚'; }
-      else { prob -= 0.18; label = timing < 0.7 ? '太早' : '太晚'; }
-    } else prob += (D().ai - 1) * 0.6 + rand(-0.03, 0.03);
-    if (hyp(p.vel.x, p.vel.z) > 2 && !p.fade) prob -= 0.05;
+      const win = p.win || 0.07, err = timing - 0.91; p.timingErr = err;
+      if (Math.abs(err) <= win) { // 甜蜜點：空檔幾乎必進，被貼身才可能不進
+        p.shotGrade = 'perfect'; prob = cd < 0.9 ? 0.72 : cd < 1.5 ? 0.88 : 0.97; if (d > 8.6) prob *= 0.8; meterFlash('perfect');
+      } else if (Math.abs(err) <= win * 2.3) { p.shotGrade = 'good'; prob += 0.05; meterFlash('good'); }
+      else { p.shotGrade = 'bad'; prob *= 0.45; meterFlash('bad'); }
+    } else { p.shotGrade = null; p.timingErr = 0; prob += (D().ai - 1) * 0.6 + rand(-0.03, 0.03); }
+    if (hyp(p.vel.x, p.vel.z) > 2 && !p.fade && p.shotGrade !== 'perfect') prob -= 0.05;
     if (p.fade) { prob += cd < 1.4 ? 0.06 : -0.04; if (isUser(p) && !label) label = '後仰跳投'; }
   } else if (p.team === 1) prob += (D().ai - 1) * 0.4;
   // 投籃犯規：防守者貼身封阻或伸手
@@ -400,7 +445,8 @@ function releaseShot(p, timing) {
     const fc = (kind === 'jump' ? 0.22 : 0.34) * (cd < 0.6 ? 1.3 : 1);
     if (Math.random() < fc) { fouled = true; prob -= 0.12; }
   }
-  prob = clamp(prob, 0.02, 0.95);
+  prob = clamp(prob, 0.02, p.shotGrade === 'perfect' ? 0.97 : 0.95);
+  if (kind === 'layup' && p.clutch) prob = clamp(prob - 0.04, 0.05, 0.9);
   let make = Math.random() < prob;
   if (p.forceMake != null) { make = p.forceMake; p.forceMake = null; }
   (window.__shots = window.__shots || []).push({ k: kind, d: +d.toFixed(1), cd: +cd.toFixed(1), p: +prob.toFixed(2), make, team: p.team, res: null }); ball.shotRec = window.__shots[window.__shots.length - 1];
@@ -408,6 +454,16 @@ function releaseShot(p, timing) {
   const tgt = rimC.clone();
   const toShooter = new THREE.Vector3(p.pos.x - bx, 0, p.pos.z).normalize();
   if (make) { tgt.x += rand(-0.03, 0.03); tgt.z += rand(-0.03, 0.03); }
+  else if (kind === 'jump' && p.shotGrade && p.shotGrade !== 'perfect') {
+    // 出手太早 → 偏短打前框；太晚 → 偏長打後框或籃板
+    const m = rand(0.2, 0.3) + (d > 9 ? rand(0, 0.5) : 0);
+    tgt.addScaledVector(toShooter, p.timingErr < 0 ? m : -m);
+    tgt.add(new THREE.Vector3(-toShooter.z, 0, toShooter.x).multiplyScalar(rand(-0.06, 0.06)));
+  }
+  else if (kind === 'jump' && p.shotGrade === 'perfect') {
+    // 甜蜜點但被干擾：在籃框上滾出（左右偏一點）
+    tgt.add(new THREE.Vector3(-toShooter.z, 0, toShooter.x).multiplyScalar(rand(0.17, 0.22) * (Math.random() < 0.5 ? 1 : -1)));
+  }
   else {
     const r = Math.random(), m = rand(0.19, 0.3) + (d > 9 ? rand(0, 0.8) : 0);
     if (r < 0.45) tgt.addScaledVector(toShooter, m);
@@ -417,15 +473,22 @@ function releaseShot(p, timing) {
   S.stats[p.team].fga++; p.st.fga++; if (three) { S.stats[p.team].tpa++; p.st.tpa++; }
   ball.state = 'shot'; ball.holder = null; ball.lastTeam = p.team; ball.rimTouched = false; ball.missed = false;
   ball.shot = { team: p.team, shooter: p, three, t: 0, tried: new Set(), kind, buzzer: S.clock < 1.2 };
+  p.clutchShot = !!p.clutch;
   for (const q of players) q.keyT = 0;
   ball.pos.copy(from);
   if (kind === 'dunk') {
-    const top = rimC.clone().addScaledVector(toShooter, make ? 0.03 : 0.27); top.y = RIM_H + 0.22;
-    ball.pos.copy(top); ball.vel.set(-toShooter.x * (make ? 0.4 : -1.4), -6.5, -toShooter.z * (make ? 0.4 : -1.4));
-    msg(p.dunk ? DUNKS[p.dunk.style][0] + '！' : '灌籃！', 'big'); sfx.rim(1); sfx.board(1); sfx.cheer(1);
+    const hand = p.visBall && p.visT === renderTick ? p.visBall.clone() : handBall(p);
+    // 手要在籃框上方、離框心不超過 0.42 公尺，球才砸得進
+    hand.y = Math.max(hand.y, RIM_H + 0.18);
+    const hv = new THREE.Vector3(hand.x - bx, 0, hand.z); if (hv.length() > 0.12) hv.setLength(0.12);
+    hand.set(bx + hv.x, hand.y, hv.z);
+    const aim = rimC.clone().addScaledVector(toShooter, make ? 0.0 : 0.3); aim.y = RIM_H - 0.3;
+    ball.pos.copy(hand); ball.vel.copy(aim.sub(hand).normalize().multiplyScalar(make ? 6.5 : 5.0));
+    if (make) say(p.dunk ? pick([DUNKS[p.dunk.style][0] + '！', '一記' + DUNKS[p.dunk.style][0] + '！']) : '灌籃！', 2); sfx.rim(1); sfx.board(1); if (make) sfx.cheer(1);
     arena.crowdUniforms.uCheer.value = 1;
     rimFlex[toShooter.x * 0 + (bx > 0 ? 1 : 0)] = 0.5; S.slowmo = 0.5; S.shake = 0.35;
-    if (make) { p.action = 'hang'; p.actT = 0; p.hangT = 0.55; p.pos.set(bx + toShooter.x * 0.34, 0, toShooter.z * 0.34); p.vel.set(0, 0, 0); p.jv = 0; p.jy = Math.max(0.3, RIM_H + 0.02 - 2.44 * p.scale); p.facing = Math.atan2(-toShooter.x, -toShooter.z); }
+    // 手在籃框附近才掛框，位置用 0.12 秒平滑移過去（不瞬移）
+    if (make && hand.distanceTo(rimC) < 0.6) { p.action = 'hang'; p.actT = 0; p.hangT = 0.55; p.hangFrom = { x: p.pos.x, z: p.pos.z, y: p.jy }; p.hangTo = { x: bx + toShooter.x * 0.34, z: toShooter.z * 0.34, y: Math.max(0.3, RIM_H + 0.02 - 2.44 * p.scale) }; p.vel.set(0, 0, 0); p.jv = 0; p.facing = Math.atan2(-toShooter.x, -toShooter.z); }
   } else if (kind === 'layup') ball.vel.copy(launch(from, tgt, 0.45));
   else if (kind === 'hook') ball.vel.copy(launch(from, tgt, 0.85));
   else ball.vel.copy(launch(from, tgt, 1.0 + 0.12 * d));
@@ -433,7 +496,8 @@ function releaseShot(p, timing) {
   if (label && isUser(p)) showShotLabel(label, label === '完美出手');
   if (fouled) callFoul(nd, p, 'shoot', three ? 3 : 2);
 }
-function showShotLabel(t, good) { const el = $('slabel'); el.textContent = t; el.className = 'show' + (good ? ' good' : ''); clearTimeout(showShotLabel.t); showShotLabel.t = setTimeout(() => el.className = '', 900); }
+function showShotLabel() { } // 不在畫面上顯示文字
+function meterFlash(kind) { S.meterHold = 0.55; const m = $('meter'); m.dataset.r = kind; m.classList.add('flash'); clearTimeout(meterFlash.t); meterFlash.t = setTimeout(() => m.classList.remove('flash'), 550); }
 
 // ================= 傳球、抄截、招式 =================
 function passTarget(p, dir) {
@@ -620,7 +684,7 @@ function updateFT(dt) {
   } else if (ft.stage === 'aim') {
     sh.facing = Math.atan2(basketX(sh.team) - sh.pos.x, -sh.pos.z);
     if (isUser(sh)) {
-      if (inp.b1Down && !sh.action) { sh.action = 'ftshoot'; sh.actT = 0; }
+      if (inp.b1Down && !sh.action) { sh.action = 'ftshoot'; sh.actT = 0; const z = document.querySelector('#meter .zone'); z.style.bottom = '84%'; z.style.height = '14%'; }
       if (sh.action === 'ftshoot' && (inp.b1Up || sh.actT > 0.75)) releaseFT(sh.actT / 0.6);
     } else if (ft.t > ft.aiT) { if (!sh.action) { sh.action = 'ftshoot'; sh.actT = 0; } else if (sh.actT > 0.52) releaseFT(null); }
   } else if (ft.stage === 'flight') {
@@ -635,9 +699,9 @@ function releaseFT(timing) {
   sh.action = 'follow'; sh.actT = 0; sh.released = true;
   let prob = 0.77 * sh.ft * (0.92 + 0.08 * sh.sta);
   if (timing != null) {
-    if (timing >= 0.84 && timing <= 0.98) { prob += 0.14; showShotLabel('完美出手', true); }
-    else if (timing >= 0.7 && timing <= 1.08) prob += 0.0;
-    else { prob -= 0.3; showShotLabel(timing < 0.7 ? '太早' : '太晚'); }
+    if (timing >= 0.84 && timing <= 0.98) { prob = 0.97; meterFlash('perfect'); }
+    else if (timing >= 0.7 && timing <= 1.08) meterFlash('good');
+    else { prob -= 0.3; meterFlash('bad'); }
   } else prob += (D().ai - 1) * 0.5;
   const make = Math.random() < clamp(prob, 0.05, 0.97);
   const bx = basketX(sh.team);
@@ -739,7 +803,7 @@ function stepBall(dt) {
       }
       if (sh.t < 0.45 && dHand < 0.42) {
         sh.tried.add(q);
-        if (Math.random() < 0.68 * q.blk * (sh.kind === 'dunk' ? 0.4 : 1)) {
+        if (Math.random() < 0.68 * q.blk * (sh.kind === 'dunk' ? 0.4 : 1) * (sh.shooter.clutchShot ? 0.35 : 1)) {
           const bx = basketX(sh.team); const away = new THREE.Vector3(ball.pos.x - bx, 0, ball.pos.z).normalize();
           ball.vel.set(away.x * rand(3, 5) + rand(-2, 2), rand(0, 2.2), away.z * rand(3, 5) + rand(-2, 2));
           ball.state = 'loose'; ball.missed = true; ball.lastTeam = q.team;
@@ -809,6 +873,12 @@ function scored(s) {
   const pts = sh && sh.team === team && sh.three ? 3 : 2;
   creditBasket(team, sh && sh.team === team ? sh.shooter : null, pts, s);
 }
+function celebrate(team, shooter, big) {
+  if (shooter) { shooter.celebT = 1.6; shooter.celebType = (Math.random() * 3) | 0; }
+  for (const q of teams[team]) if (q !== shooter && shooter && hyp(q.pos.x - shooter.pos.x, q.pos.z - shooter.pos.z) < 6) { q.celebT = 1.0; q.celebType = 3; }
+  for (const q of teams[1 - team]) if (shooter && hyp(q.pos.x - shooter.pos.x, q.pos.z - shooter.pos.z) < 3.5) q.dejT = 1.3;
+  if (big) for (const q of roster[team]) if (!q.onCourt) q.cheerT = 2.4;
+}
 function creditBasket(team, shooter, pts, s) {
   if (ball.shotRec) ball.shotRec.res = 'in';
   const sh = ball.shot;
@@ -825,7 +895,14 @@ function creditBasket(team, shooter, pts, s) {
   sfx.swish(); sfx.cheer(team === 0 ? (pts === 3 ? 1 : 0.7) : 0.25);
   arena.crowdUniforms.uCheer.value = team === 0 ? 1 : 0.35;
   const andOne = S.pendingFT && shooter && S.pendingFT.shooter === shooter;
-  msg(andOne ? '進算加罰！' : (pts === 3 ? '三分球！' : '+2'), team === 0 ? 'big' : 'away');
+  const k = sh ? sh.kind : 'jump';
+  if (andOne) say(pick(['進算！還有加罰！', '打進還有一罰！']), 2);
+  else if (pts === 3) say(pick(['三分球命中！', '三分出手，進了！', '漂亮的三分球！']), 2);
+  else if (k === 'dunk') { /* 灌籃已在出手時播報 */ }
+  else if (k === 'layup') say(pick(['上籃得手', '切入上籃，進了', '輕鬆放進']), 1);
+  else if (k === 'hook') say(pick(['勾射得分', '低位勾射，進了']), 1);
+  else say(pick(['跳投命中', '中距離，進了', '兩分到手']), 0);
+  celebrate(team, shooter, pts === 3 || andOne || k === 'dunk' || (sh && sh.buzzer));
   if (shooter && (team === 0 || pts === 3 || andOne || (sh && sh.kind === 'dunk'))) setTimeout(() => lowerThird(shooter, andOne ? '2+1' : (pts === 3 ? '三分命中' : '')), 600);
   // 精彩重播：灌籃、三分、2+1、壓哨
   const hl = sh && (sh.kind === 'dunk' || pts === 3 || andOne || sh.buzzer);
@@ -937,7 +1014,8 @@ function updateBench(dt) {
       else { p.vel.set(dx / d * 2.6, 0, dz / d * 2.6); p.pos.addScaledVector(p.vel, dt); p.facing = Math.atan2(dx, dz); p.pose = 'run'; continue; }
     }
     if (p.chair < 0) p.pos.copy(benchSeat(p));
-    const c = CHAIRS(t)[p.chair]; p.pos.set(c.x, 0, c.z + 0.05); p.vel.set(0, 0, 0); p.facing = Math.PI; p.pose = 'sit';
+    p.cheerT = (p.cheerT || 0) - dt;
+    const c = CHAIRS(t)[p.chair]; const up = p.cheerT > 0; p.pos.set(c.x, 0, c.z + (up ? -0.35 : 0.05)); p.vel.set(0, 0, 0); p.facing = Math.PI; p.pose = up ? 'cheer' : 'sit';
   }
 }
 
@@ -1013,7 +1091,7 @@ function startTipoff(ot) {
   referee.pos.set(0, 0, -0.75); referee.facing = 0;
   S.tip = { tossed: false, res: false, aiJump: [rand(1.05, 1.25), rand(1.0, 1.35)] };
   ctrl = teams[0][4];
-  msg((ot ? QNAME(S.quarter) + '　' : '') + '跳球！按「跳」爭球');
+  say((ot ? QNAME(S.quarter) + '，' : '') + '雙方準備跳球', 1); document.body.classList.add('tiphint');
 }
 function updateTipoff(dt) {
   S.timer += dt; const tip = S.tip;
@@ -1031,7 +1109,7 @@ function updateTipoff(dt) {
     ball.state = 'loose'; ball.lastTeam = w;
     const T = 0.85; ball.vel.set((mate.pos.x - ball.pos.x) / T, (1.3 - ball.pos.y + 0.5 * G * T * T) / T, (mate.pos.z - ball.pos.z) / T);
     if (S.quarter === 1) S.arrow = 1 - w;
-    S.phase = 'live'; S.poss = -1; S.shotClock = 24;
+    S.phase = 'live'; S.poss = -1; S.shotClock = 24; document.body.classList.remove('tiphint');
     sfx.cheer(0.4);
   }
 }
@@ -1390,8 +1468,17 @@ function updatePlayers(dt) {
           if (user) { if (inp.b1Up || fill > 1.25) releaseShot(p, fill); }
           else if (p.actT >= p.aiRelease) releaseShot(p, null);
         }
-      } else if ((p.action === 'layup' || p.action === 'dunk') && !p.released && p.jv < 0.35) releaseShot(p, null);
+      } else if ((p.action === 'layup' || p.action === 'dunk') && !p.released) {
+        // 拉桿：空中把球收到腰間、換到另一側再出手，等防守者先落下
+        if (!p.clutch && p.jy > 0.2 && p.jv > -0.5 && ((user && inp.b4Down) || (!user && opp(p).some(o => o.jy > 0.2 && hyp(o.pos.x - p.pos.x, o.pos.z - p.pos.z) < 1.4) && Math.random() < 0.5))) {
+          p.clutch = { t: 0 }; p.hand = -p.hand; if (p.jv > 0.6) p.jv = Math.max(p.jv, 1.2);
+          if (S.phase === 'live') setTimeout(() => say(pick(['空中拉桿！', '漂亮的拉桿！']), 1), 250);
+        }
+        if (p.clutch) { p.clutch.t += dt; if (p.clutch.t > 0.24) releaseShot(p, null); }
+        else if (p.jv < 0.35) releaseShot(p, null);
+      }
       else if ((p.action === 'pass' && p.actT > 0.3) || (p.action === 'steal' && p.actT > 0.35) || (p.action === 'contest' && p.actT > 0.6) || (p.action === 'follow' && p.actT > 0.6 && p.jy === 0)) p.action = null;
+      if (p.released && p.clutch && (p.action === 'layup' || p.action === 'dunk' || p.action === 'hang' || !p.action)) p.clutch = null;
       if ((p.action === 'shoot' && p.released && p.jy === 0 && p.actT > 0.3 && !(p.fade = false)) || ((p.action === 'layup' || p.action === 'dunk' || p.action === 'block' || p.action === 'rebound') && p.jy === 0 && p.jv === 0 && p.actT > 0.1)) p.action = null;
     }
     if (p.oop) {
@@ -1490,7 +1577,8 @@ function updatePlayers(dt) {
       const tot = p.dunk.style === '360' ? Math.PI * 2 : Math.PI, rate = tot / Math.max(0.2, p.dunk.tApex);
       const step = Math.min(rate * dt, tot - p.dunk.spin); p.dunk.spin += step; p.facing += step;
     }
-    if (p.action === 'hang') { p.hangT -= dt; p.vel.set(0, 0, 0); if (p.hangT <= 0) { p.action = null; p.dunk = null; p.jv = -0.5; p.vel.set(-Math.sin(p.facing) * 1.2, 0, -Math.cos(p.facing) * 1.2); } }
+    if (p.action === 'hang') { if (p.hangFrom) { const u = Math.min(1, p.actT / 0.12), e = u * (2 - u); p.pos.x = p.hangFrom.x + (p.hangTo.x - p.hangFrom.x) * e; p.pos.z = p.hangFrom.z + (p.hangTo.z - p.hangFrom.z) * e; p.jy = p.hangFrom.y + (p.hangTo.y - p.hangFrom.y) * e; }
+      p.hangT -= dt; p.vel.set(0, 0, 0); if (p.hangT <= 0) { p.action = null; p.dunk = null; p.jv = -0.5; p.vel.set(-Math.sin(p.facing) * 1.2, 0, -Math.cos(p.facing) * 1.2); } }
     else if (p.jy > 0 || p.jv > 0) { p.jv -= G * dt; p.jy += p.jv * dt; if (p.jy <= 0) { p.jy = 0; p.jv = 0; p.landT = 0.15; if (p.action === 'layup' || p.action === 'dunk') p.vel.multiplyScalar(0.3); } }
     // ---- 面向 ----
     let fa = null;
@@ -1504,9 +1592,11 @@ function updatePlayers(dt) {
     if (fa !== null) { let da = fa - p.facing; da = Math.atan2(Math.sin(da), Math.cos(da)); p.facing += clamp(da, -10 * dt, 10 * dt); }
     // ---- 姿勢 ----
     const scr = S.screen[p.team];
+    p.celebT = (p.celebT || 0) - dt; p.dejT = (p.dejT || 0) - dt;
     if (p.action === 'ftshoot') p.pose = 'shoot';
     else if (p.action === 'euro' || p.action === 'dream') { p.pose = 'euro'; }
     else if (p.action === 'shoot' && p.shotKind === 'hook') p.pose = 'hook';
+    else if (p.clutch && !p.released && (p.action === 'layup' || p.action === 'dunk')) p.pose = 'clutch';
     else if (p.action === 'dunk' && p.dunk && p.dunk.style === 'windmill') p.pose = 'windmill';
     else if (ball.holder === p && p.post && S.phase === 'live') { p.pose = 'post'; p.dribblePh += dt * 6; }
     else if (p.action) p.pose = p.action === 'rebound' ? 'rebound' : p.action;
@@ -1518,6 +1608,8 @@ function updatePlayers(dt) {
       else { p.pose = S.phase === 'inbound' || S.phase === 'dead' ? 'hold' : 'dribble'; p.dribblePh += dt * (7 + hyp(p.vel.x, p.vel.z) * 0.9); }
     }
     else if ((scr && scr.screener === p && scr.stage === 'hold') || (S.play[p.team] === 'three' && p.role >= 3 && S.poss === p.team && S.phase === 'live' && ball.holder !== p && hyp(p.vel.x, p.vel.z) < 0.5)) p.pose = 'screen';
+    else if (p.celebT > 0 && ball.holder !== p) p.pose = 'celebrate';
+    else if (p.dejT > 0 && ball.holder !== p) p.pose = 'dejected';
     else if (S.phase === 'ft' || S.phase === 'dead' || S.phase === 'timeout') p.pose = hyp(p.vel.x, p.vel.z) > 0.6 ? 'run' : 'idle';
     else if (S.poss !== p.team && S.phase === 'live' && ball.holder && hyp(teams[1 - p.team][p.idx].pos.x - p.pos.x, teams[1 - p.team][p.idx].pos.z - p.pos.z) < 3.2 && hyp(p.vel.x, p.vel.z) < 4) p.pose = 'defense';
     else p.pose = 'run';
@@ -1810,11 +1902,11 @@ function applySettings() {
     else { el.style.right = `calc(max(18px, env(safe-area-inset-right)) + ${x}px)`; el.style.left = 'auto'; }
   }
   const joyEl = $('joy'); if (SET.lefty) { joyEl.style.right = 'calc(max(20px, env(safe-area-inset-right)) + 10px)'; joyEl.style.left = 'auto'; } else { joyEl.style.right = ''; }
-  document.querySelectorAll('#setp .opt').forEach(g => { const k = g.dataset.s; g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(k === 'lefty' || k === 'vib' ? +SET[k] : SET[k]) === b.dataset.v)); });
+  document.querySelectorAll('#setp .opt').forEach(g => { const k = g.dataset.s; g.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(k === 'lefty' || k === 'vib' || k === 'voice' ? +SET[k] : SET[k]) === b.dataset.v)); });
 }
 document.querySelectorAll('#setp .opt').forEach(g => g.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return; const k = g.dataset.s;
-  SET[k] = k === 'size' ? +b.dataset.v : (k === 'lefty' || k === 'vib') ? b.dataset.v === '1' : b.dataset.v;
+  SET[k] = k === 'size' ? +b.dataset.v : (k === 'lefty' || k === 'vib' || k === 'voice') ? b.dataset.v === '1' : b.dataset.v;
   store.set('settings', SET); applySettings();
 }));
 const openSet = () => { $('setp').classList.add('show'); applySettings(); };
@@ -2024,6 +2116,11 @@ function render(dt) {
       vis = handWorld(hb.rig, true).add(handWorld(hb.rig, false)).multiplyScalar(0.5).addScaledVector(fwd(hb), 0.08 * hb.scale);
       if (pose === 'shoot') vis.y += 0.07;
     } else if (pose === 'layup') vis = handWorld(hb.rig, true).add(new THREE.Vector3(0, 0.1, 0));
+    else if (pose === 'dunk' || pose === 'windmill' || pose === 'clutch') {
+      const two = pose === 'clutch' || (hb.dunk && hb.dunk.style === 'two');
+      vis = two ? handWorld(hb.rig, true).add(handWorld(hb.rig, false)).multiplyScalar(0.5).addScaledVector(fwd(hb), 0.06) : handWorld(hb.rig, true).addScaledVector(fwd(hb), 0.05);
+      vis.y += 0.08;
+    }
     hb.visBall = vis.clone(); hb.visT = renderTick;
   }
   ballMesh.position.copy(vis); ballMesh.visible = vis.y > -1;
@@ -2044,11 +2141,12 @@ function render(dt) {
   $('letterbox').className = replay || S.phase === 'intro' ? 'on' : '';
   document.body.classList.toggle('cine', replay || S.phase === 'intro');
   const m = $('meter');
-  const metering = ctrl && isUser(ctrl) && ((ctrl.action === 'shoot' && !ctrl.released && ctrl.shotKind === 'jump') || ctrl.action === 'ftshoot');
+  S.meterHold = (S.meterHold || 0) - dt;
+  const metering = ctrl && isUser(ctrl) && ((ctrl.action === 'shoot' && ctrl.shotKind === 'jump' && (!ctrl.released || S.meterHold > 0)) || ctrl.action === 'ftshoot' || (ctrl.action === 'follow' && S.meterHold > 0));
   if (metering) {
     const v = new THREE.Vector3(ctrl.pos.x, 2.4 * ctrl.scale + ctrl.jy, ctrl.pos.z).project(camera);
     m.style.left = ((v.x + 1) / 2 * innerWidth + 34) + 'px'; m.style.top = ((1 - v.y) / 2 * innerHeight - 10) + 'px';
-    m.style.display = 'block'; $('mfill').style.height = Math.min(100, ctrl.actT / (ctrl.action === 'ftshoot' ? 0.6 : 0.5) * 100) + '%';
+    m.style.display = 'block'; if (!ctrl.released || ctrl.action === 'ftshoot') $('mfill').style.height = Math.min(100, ctrl.actT / (ctrl.action === 'ftshoot' ? 0.6 : 0.5) * 100) + '%';
   } else m.style.display = 'none';
   const sl = $('slabel');
   if (sl.className && ctrl) { const v = new THREE.Vector3(ctrl.pos.x, 2.6 * ctrl.scale, ctrl.pos.z).project(camera); sl.style.left = ((v.x + 1) / 2 * innerWidth) + 'px'; sl.style.top = ((1 - v.y) / 2 * innerHeight - 20) + 'px'; }
@@ -2126,6 +2224,7 @@ document.querySelectorAll('.opt').forEach(g => {
 renderColorOpts();
 $('start').addEventListener('click', () => {
   applyTeamColors();
+  try { if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } } catch (e) { }
   initAudio();
   if (matchMedia('(pointer:coarse)').matches && !isFull()) goFullscreen(false);
   startMode();

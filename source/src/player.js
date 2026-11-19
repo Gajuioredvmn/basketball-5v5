@@ -336,10 +336,22 @@ export function animatePlayer(p, dt) {
     const br = Math.sin(performance.now() * 0.002 + p.runPhase) * 0.03;
     P.shLx = 0.05 + br; P.shRx = 0.05 + br; P.elL = -0.25; P.elR = -0.25; P.shLz = 0.12; P.shRz = -0.12; P.hipL = -0.05; P.hipR = 0.08; P.kneeL = 0.12; P.kneeR = 0.18;
   } else if (mode === 'celebrate') {
-    const w = Math.sin(performance.now() * 0.012 + p.runPhase);
-    P.shRx = -2.8 - w * 0.2; P.elR = -0.3; P.shLx = -0.4; P.shLz = 0.5; P.elL = -1.2;
+    const w = Math.sin(performance.now() * 0.012 + p.runPhase), ty = p.celebType || 0;
+    if (ty === 0) { P.shRx = -2.6 - w * 0.25; P.elR = -1.2; P.shLx = -0.4; P.shLz = 0.4; P.elL = -0.9; } // 握拳振臂
+    else if (ty === 1) { P.shRx = P.shLx = -3.0; P.elR = P.elL = -0.1; P.shRz = -0.25; P.shLz = 0.25; P.head = -0.25; } // 雙手指天
+    else if (ty === 2) { P.shRx = P.shLx = -1.5; P.shRz = -1.2; P.shLz = 1.2; P.elR = P.elL = -1.9; P.lean = -0.1; } // 秀肌肉
+    else { const c = Math.abs(Math.sin(performance.now() * 0.02)); P.shRx = P.shLx = -1.25; P.shRz = 0.2 + c * 0.3; P.shLz = -0.2 - c * 0.3; P.elR = P.elL = -0.5; } // 拍手
+  } else if (mode === 'dejected') { // 雙手叉腰、低頭
+    P.shRx = P.shLx = 0.25; P.shRz = -0.55; P.shLz = 0.55; P.elR = P.elL = -1.7; P.head = 0.35; P.lean = 0.05;
+  } else if (mode === 'cheer') { // 板凳起立揮手
+    const w = Math.sin(performance.now() * 0.015 + p.runPhase);
+    P.shRx = -2.9 + w * 0.3; P.shLx = -2.9 - w * 0.3; P.elR = P.elL = -0.3; P.shRz = -0.2; P.shLz = 0.2; P.kneeL = P.kneeR = 0.15;
+  } else if (mode === 'clutch') { // 拉桿：先把球收到腰間，再從另一側往上送
+    const t = p.clutch ? p.clutch.t : 0, up = t > 0.12;
+    P.shRx = P.shLx = up ? -2.7 : -0.7; P.elR = P.elL = up ? -0.3 : -1.3; P.shRz = up ? 0.5 * (p.hand || 1) : 0.3; P.shLz = up ? 0.5 * (p.hand || 1) : -0.3;
+    P.hipL = -1.0; P.kneeL = 1.4; P.hipR = -0.4; P.kneeR = 0.9; P.lean = up ? -0.05 : 0.25;
   }
-  if (air && !['layup', 'dunk', 'hang'].includes(mode)) { P.kneeL = 0.75; P.kneeR = 0.65; P.hipL = -0.3; P.hipR = -0.2; P.hipLz = 0; P.hipRz = 0; }
+  if (air && !['layup', 'dunk', 'hang', 'clutch', 'windmill'].includes(mode)) { P.kneeL = 0.75; P.kneeR = 0.65; P.hipL = -0.3; P.hipR = -0.2; P.hipLz = 0; P.hipRz = 0; }
   if (p.landT > 0) { const q = p.landT / 0.15; P.kneeL += 0.6 * q; P.kneeR += 0.6 * q; P.hipL -= 0.3 * q; P.hipR -= 0.3 * q; }
   r.legL.hip.rotation.x = lerp(r.legL.hip.rotation.x, P.hipL, k);
   r.legR.hip.rotation.x = lerp(r.legR.hip.rotation.x, P.hipR, k);
