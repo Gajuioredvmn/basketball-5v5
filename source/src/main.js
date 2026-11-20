@@ -835,33 +835,42 @@ function dreamShake(p) {
   const g = guardOf(p);
   if (g && hyp(g.pos.x - p.pos.x, g.pos.z - p.pos.z) < 2 && Math.random() < 0.42 * p.handle * p.postA / g.def + 0.12) { g.slowT = 0.95; if (Math.random() < 0.3) { msg('夢幻腳步！', 'big'); sfx.oh(); } }
 }
-function doMove(p, kind, side) {
+// 玩家的運球招式：按「招式」時看搖桿在螢幕上的方向（上下左右以螢幕為準）
+//  不推＝換手運球　左／右＝換手運球往那邊切　左下／右下＝胯下運球　正下＝背後運球　正上＝猶豫步　左上／右上＝後撤步　連按兩下＝轉身
+function userMove(p, dt) {
+  if (p.pendXo != null) { p.pendXo -= dt; if (p.pendXo <= 0) { p.pendXo = null; doMove(p, 'xover'); } }
+  if (!inp.b4Down) return;
+  if (p.pendXo != null) { p.pendXo = null; doMove(p, 'spin'); return; } // 0.22 秒內按第二下＝轉身
+  if (inp.mag < 0.3) { if (p.moveCD <= 0 && !p.action && p.jy <= 0) p.pendXo = 0.22; return; } // 等一下看會不會按第二下
+  const a = Math.atan2(-inp.z, inp.x) * 180 / Math.PI, dir = { x: inp.x / inp.mag, z: inp.z / inp.mag };
+  let kind;
+  if (a > 60 && a < 120) kind = 'hesi';
+  else if (a < -60 && a > -120) kind = 'behind';
+  else if ((a >= 30 && a <= 60) || (a >= 120 && a <= 150)) kind = 'stepback';
+  else if ((a <= -30 && a >= -60) || (a <= -120 && a >= -150)) kind = 'cross';
+  else kind = 'xover';
+  doMove(p, kind, null, dir);
+}
+function doMove(p, kind, side, dir) {
   if (p.moveCD > 0 || p.jy > 0 || p.action || ball.holder !== p) return;
   p.moveCD = 1.0;
   const B = new THREE.Vector3(basketX(p.team) - p.pos.x, 0, -p.pos.z).normalize();
   const L = new THREE.Vector3(-B.z, 0, B.x);
-  if (!kind) {
-    if (inp.mag < 0.3) kind = 'spin';
-    else {
-      const along = inp.x * B.x + inp.z * B.z, lat = inp.x * L.x + inp.z * L.z; side = Math.sign(lat) || 1;
-      if (along < -0.3 && Math.abs(lat) > 0.4) kind = 'behind';
-      else if (along < -0.5) kind = 'stepback';
-      else if (Math.abs(lat) > 0.45) kind = along < -0.1 ? 'cross' : 'xover';
-      else if (along > 0.6) kind = 'hesi';
-      else kind = 'spin';
-    }
-  }
   side = side || (Math.random() < 0.5 ? 1 : -1);
+  // 有指定方向（玩家推搖桿）就往那個方向；換手運球沒推搖桿時，往換過去那隻手的那一邊切
+  let D = dir ? new THREE.Vector3(dir.x, 0, dir.z) : null;
+  if (!D && (kind === 'xover' || kind === 'cross' || kind === 'behind')) { const f = fwd(p); D = new THREE.Vector3(-f.z, 0, f.x).multiplyScalar(-(p.hand || 1)).multiplyScalar(0.8).addScaledVector(B, 0.6).normalize(); }
+  if (D) { const t = p.pos.clone().addScaledVector(D, 2.2); if (Math.abs(t.z) > HZ - 0.4) D.z = -D.z; if (Math.abs(t.x) > HX - 0.4) D.x = -D.x; }
   // 靠近邊線時往場內做
   { const test = p.pos.clone().addScaledVector(L, side * 2.2); if (Math.abs(test.z) > HZ - 0.4 || Math.abs(test.x) > HX - 0.4) side = -side; }
   p.lastMove = kind; p.lastMoveT = 1.2;
-  if (kind === 'xover') { p.hand = -p.hand; p.moveT = p.moveDur = 0.38; p.moveVel.copy(L).multiplyScalar(side * 5.4).addScaledVector(B, 1.4); p.moveKind = 'xover'; if (isUser(p)) showShotLabel('換手運球', true); }
-  else if (kind === 'cross') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; p.moveVel.copy(L).multiplyScalar(side * 5.2).addScaledVector(B, 1.2); p.moveKind = 'cross'; if (isUser(p)) showShotLabel('胯下運球', true); }
-  else if (kind === 'behind') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; p.moveVel.copy(L).multiplyScalar(side * 5.0).addScaledVector(B, 1.0); p.moveKind = 'behind'; if (isUser(p)) showShotLabel('背後運球', true); }
+  if (kind === 'xover') { p.hand = -p.hand; p.moveT = p.moveDur = 0.38; p.moveVel.copy(D).multiplyScalar(5.6); p.moveKind = 'xover'; if (isUser(p)) showShotLabel('換手運球', true); }
+  else if (kind === 'cross') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; p.moveVel.copy(D).multiplyScalar(5.3); p.moveKind = 'cross'; if (isUser(p)) showShotLabel('胯下運球', true); }
+  else if (kind === 'behind') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; if (dir) { const f = fwd(p); D = new THREE.Vector3(-f.z, 0, f.x).multiplyScalar(-(p.hand || 1) * -1).multiplyScalar(0.8).addScaledVector(B, 0.6).normalize(); } p.moveVel.copy(D).multiplyScalar(5.1); p.moveKind = 'behind'; if (isUser(p)) showShotLabel('背後運球', true); }
   else if (kind === 'hesi') { p.moveT = p.moveDur = 0.55; p.moveB = B.clone(); p.moveVel.copy(B).multiplyScalar(0.8); p.moveKind = 'hesi'; p.spinDir = side; if (isUser(p)) showShotLabel('猶豫步', true); }
   else if (kind === 'spin') { if (isUser(p)) showShotLabel('轉身', true); p.moveT = p.moveDur = 0.45; p.moveVel.copy(L).multiplyScalar(side * 3.4).addScaledVector(B, 3.0); p.moveKind = 'spin'; p.spinDir = side; }
   else { if (isUser(p)) showShotLabel('後撤步', true); p.moveT = p.moveDur = 0.32; p.moveVel.copy(B).multiplyScalar(-4.2); p.moveKind = 'stepback'; p.openT = 0.9; if (S.fc && Math.abs(p.pos.x) < 2.2) p.moveVel.multiplyScalar(0.2); }
-  if (isUser(p)) tutEv('move');
+  if (isUser(p)) { tutEv('move'); if (kind === 'xover') tutEv('xover'); }
   const g = guardOf(p);
   if (g && hyp(g.pos.x - p.pos.x, g.pos.z - p.pos.z) < 1.9) {
     const ch = 0.34 * p.handle / g.def * (kind === 'stepback' ? 0.6 : (kind === 'hesi' ? 0.8 : 1)) * (isUser(g) ? 0.8 : 1);
@@ -1962,7 +1971,7 @@ function updatePlayers(dt) {
       if (ball.holder === p) {
         if (inp.b1Down) startShot(p);
         if (inp.b2Down && !p.action) { const dir = inp.mag > 0.3 ? { x: inp.x, z: inp.z } : { x: Math.sin(p.facing), z: Math.cos(p.facing) }; doPass(p, passTarget(p, dir)); }
-        if (inp.b4Down) { if (p.post) dreamShake(p); else if (distB(p) < 4.6 && S.fc) enterPost(p); else doMove(p); }
+        if (inp.b4Down && (p.post || (distB(p) < 4.6 && S.fc))) { if (p.post) dreamShake(p); else enterPost(p); } else userMove(p, dt);
       } else {
         if (inp.b1Down && !p.action && jump(p, 3.45 + p.blk * 0.25)) { p.action = ball.holder || (ball.state === 'shot' && !ball.missed) ? 'block' : 'rebound'; p.actT = 0; }
         if (inp.b2Down) doSteal(p);
@@ -2280,7 +2289,8 @@ tutRing.rotation.x = -Math.PI / 2; tutRing.position.y = 0.02; tutRing.visible = 
 const TUT = [
   { text: '歡迎來到教學。用左下角的搖桿移動，走到地上的綠色圈圈。', ring: [6.0, 3.5], done: (p, t) => t.atRing },
   { text: '很好！按住右邊的「加速」再推搖桿，可以跑得更快。加速跑到下一個圈圈。', ring: [9.5, -4.0], done: (p, t) => t.atRing && t.sprinted },
-  { text: '持球時按「招式」做運球招式：搖桿往旁邊推是換手或胯下，往後拉是後撤步，不推是轉身。做一次招式。', done: (p, t) => t.ev.move },
+  { text: '持球時搖桿不推、按一下「招式」＝換手運球（Crossover）。做一次換手運球。', done: (p, t) => t.ev.xover },
+  { text: '按「招式」時搖桿方向（照螢幕）：左右＝換手往那邊切、左下右下＝胯下、正下＝背後、正上＝猶豫步、左上右上＝後撤步；連按兩下＝轉身。做一次任何招式。', done: (p, t) => t.ev.move },
   { text: '練跳投：按住「投籃」，力道條會往上跑，在綠色區放開就是完美出手。投一次完美出手。', ring: [4.6, 0], done: (p, t) => t.ev.perfect },
   { text: '綠色區會變寬變窄：離籃框越遠、被防守越緊就越窄。到三分線外投進一球。', ring: [8.0, 0], done: (p, t) => t.ev.three },
   { text: '往籃框跑，靠近時按「投籃」就是上籃。上籃進一球。', ring: [7.0, -3.0], done: (p, t) => t.ev.layup },
@@ -2315,7 +2325,7 @@ function updatePractice(dt) {
   const p = ctrl, pr = S.pr;
   if (ball.holder === p && !p.action) {
     if (inp.b1Down) startShot(p);
-    if (inp.b4Down) doMove(p);
+    userMove(p, dt);
   } else if (ball.holder !== p && inp.b1Down && !p.action && jump(p, 3.45)) { p.action = 'rebound'; p.actT = 0; }
   updatePlayers(dt);
   if (pr.ret) { // 球自己彈回來：沿拋物線飛回球員胸前
