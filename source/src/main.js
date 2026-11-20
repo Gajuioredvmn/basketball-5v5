@@ -216,9 +216,32 @@ addEventListener('keydown', e => { if (e.repeat) return; keys[e.code] = true;
 addEventListener('keyup', e => { keys[e.code] = false; if (e.code === 'KeyJ' || e.code === 'Space') { inp.b1 = false; inp.b1Up = true; } });
 const joy = { id: null, cx: 0, cy: 0, dx: 0, dy: 0 };
 const pad = $('pad');
+// 點場上的隊友：持球時直接傳給他；防守時改控制他。用「輕點」判斷（按下到放開不到 0.28 秒、幾乎沒移動），不會跟搖桿衝突
+const taps = new Map();
+function tapPlayer(cx, cy) {
+  if (S.phase !== 'live' || !ctrl || S.paused) return false;
+  const rect = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3();
+  let best = null, bd = 1e9;
+  for (const t of teams[0]) {
+    if (t === ctrl) continue;
+    for (const hgt of [0.5, 1.1, 1.7]) { // 腳、腰、頭三個點，點到身上任何地方都算
+      v.set(t.pos.x, (hgt + t.jy) * t.scale, t.pos.z).project(camera);
+      if (v.z > 1) continue;
+      const sx = rect.left + (v.x + 1) / 2 * rect.width, sy = rect.top + (1 - v.y) / 2 * rect.height, d = hyp(sx - cx, sy - cy);
+      if (d < bd) { bd = d; best = t; }
+    }
+  }
+  if (!best || bd > Math.max(48, rect.height * 0.12)) return false;
+  if (ball.holder === ctrl) { if (!ctrl.action) { doPass(ctrl, best); buzz(15); } }
+  else if (!ball.holder || ball.holder.team !== 0) { ctrl = best; buzz(10); }
+  else return false;
+  return true;
+}
+addEventListener('pointerup', e => { const t = taps.get(e.pointerId); taps.delete(e.pointerId); if (t && performance.now() - t.t < 280 && hyp(e.clientX - t.x, e.clientY - t.y) < 14) tapPlayer(e.clientX, e.clientY); });
 pad.addEventListener('pointerdown', e => {
   if (S.phase === 'replay' || S.phase === 'intro') { skipCinematic(); return; }
   if (document.body.classList.contains('edit')) return;
+  if (e.target === pad) taps.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
   if (e.target !== pad || joy.id !== null || (SET.lefty ? e.clientX < innerWidth * 0.5 : e.clientX > innerWidth * 0.5)) return;
   joy.id = e.pointerId; joy.cx = e.clientX; joy.cy = e.clientY; joy.dx = joy.dy = 0;
   const base = $('joy'); base.style.left = (e.clientX - 60) + 'px'; base.style.top = (e.clientY - 60) + 'px'; base.classList.add('on');
@@ -2692,5 +2715,5 @@ for (let t = 0; t < 2; t++) roster[t].forEach(p => { if (!p.onCourt) p.pos.copy(
 startTipoff(); S.phase = 'title'; ball.state = 'dead'; ball.pos.set(0, BALL_R, 1);
 camLook.set(0, 0.6, 0);
 if (AUTO) { S.qlen = +(params.get('q') || 60); S.diff = 1; newGame(); }
-window.__g = { shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
+window.__g = { THREE, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
 requestAnimationFrame(frame);
