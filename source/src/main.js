@@ -336,7 +336,11 @@ function handBall(p) {
     // 胯下：從兩腳中間彈地；換手運球（Crossover）：在身體前方彈地，換到另一隻手
     const u = 1 - p.moveT / (p.moveDur || 0.42);
     const side = (q, lat, fw, y) => new THREE.Vector3(p.pos.x + r.x * lat * s * q + f.x * fw * s, y, p.pos.z + r.z * lat * s * q + f.z * fw * s);
-    const a = side(-1, 0.3, 0.28, 0.8 * s), mid = side(1, 0, pose === 'xover' ? 0.42 : 0.02, BALL_R), b = side(1, 0.3, 0.28, 0.82 * s);
+    const a = side(-1, 0.3, 0.28, 0.8 * s), b = side(1, 0.3, 0.28, 0.82 * s);
+    let mid = side(1, 0, pose === 'xover' ? 0.42 : 0.02, BALL_R);
+    if (pose === 'cross' && p.rig) { // 胯下：彈地點＝兩腳腳踝的正中間（真的從兩腿之間穿過去）
+      const al = p.rig.legL.ankle.getWorldPosition(new THREE.Vector3()), ar = p.rig.legR.ankle.getWorldPosition(new THREE.Vector3());
+      mid = al.add(ar).multiplyScalar(0.5); mid.y = BALL_R; }
     if (u < 0.5) out.copy(a).lerp(mid, u / 0.5); else out.copy(mid).lerp(b, (u - 0.5) / 0.5);
     if (u >= 0.5 && !p.crossBounced) { p.crossBounced = true; sfx.dribble(isUser(p) ? 0.9 : 0.5); }
     if (u < 0.5) p.crossBounced = false;
@@ -867,7 +871,7 @@ function doMove(p, kind, side, dir) {
   { const test = p.pos.clone().addScaledVector(L, side * 2.2); if (Math.abs(test.z) > HZ - 0.4 || Math.abs(test.x) > HX - 0.4) side = -side; }
   p.lastMove = kind; p.lastMoveT = 1.2;
   if (kind === 'xover') { p.hand = -p.hand; p.moveT = p.moveDur = 0.38; p.moveVel.copy(D).multiplyScalar(5.6); p.moveKind = 'xover'; if (isUser(p)) showShotLabel('換手運球', true); }
-  else if (kind === 'cross') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; p.moveVel.copy(D).multiplyScalar(5.3); p.moveKind = 'cross'; if (isUser(p)) showShotLabel('胯下運球', true); }
+  else if (kind === 'cross') { p.hand = -p.hand; p.moveT = p.moveDur = 0.6; p.moveVel.copy(D).multiplyScalar(5.0); p.moveKind = 'cross'; if (isUser(p)) showShotLabel('胯下運球', true); }
   else if (kind === 'behind') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; if (dir) { const f = fwd(p); D = new THREE.Vector3(-f.z, 0, f.x).multiplyScalar(-(p.hand || 1) * -1).multiplyScalar(0.8).addScaledVector(B, 0.6).normalize(); } p.moveVel.copy(D).multiplyScalar(5.1); p.moveKind = 'behind'; if (isUser(p)) showShotLabel('背後運球', true); }
   else if (kind === 'hesi') { p.moveT = p.moveDur = 0.55; p.moveB = B.clone(); p.moveVel.copy(B).multiplyScalar(0.8); p.moveKind = 'hesi'; p.spinDir = side; if (isUser(p)) showShotLabel('猶豫步', true); }
   else if (kind === 'spin') { if (isUser(p)) showShotLabel('轉身', true); p.moveT = p.moveDur = 0.45; p.moveVel.copy(L).multiplyScalar(side * 3.4).addScaledVector(B, 3.0); p.moveKind = 'spin'; p.spinDir = side; }
@@ -2004,7 +2008,9 @@ function updatePlayers(dt) {
     else if (p.moveT > 0) {
       p.moveT -= dt; want = null;
       if (p.moveKind === 'hesi' && p.moveT < p.moveDur - 0.25) p.moveVel.copy(p.moveB).multiplyScalar(7.0 * (0.82 + 0.18 * p.sta));
-      p.vel.copy(p.moveVel); if (p.moveKind === 'spin') p.facing += p.spinDir * dt * 14;
+      p.vel.copy(p.moveVel);
+      if (p.moveKind === 'cross' && p.moveT > p.moveDur * 0.4) p.vel.set(0, 0, 0); // 胯下：先站穩跨大步，球從兩腳中間過，之後才往外衝
+      if (p.moveKind === 'spin') p.facing += p.spinDir * dt * 14;
     }
     else if (p.action === 'dream') {
       want = null;
@@ -2727,7 +2733,7 @@ function render(dt) {
   if (ball.state === 'held' && hb && !replay) {
     hb.rig.root.updateMatrixWorld(true);
     const pose = hb.pose;
-    if ((pose === 'dribble' || ((pose === 'xover' || pose === 'cross' || pose === 'behind') && hb.moveT > 0)) && hb.mo && clipInfo(hb.mo.name) && clipInfo(hb.mo.name).ball && hb.moW > 0.6) {
+    if ((pose === 'dribble' || ((pose === 'xover' || pose === 'behind') && hb.moveT > 0)) && hb.mo && clipInfo(hb.mo.name) && clipInfo(hb.mo.name).ball && hb.moW > 0.6) {
       // 真實球路：片段裡錄下的球位置（角色座標）轉到場上（跑動運球、換手、胯下、背後）
       const lb = new THREE.Vector3(); clipBall(hb.mo.name, hb.mo.f, hb.mo.mirror, lb);
       lb.multiplyScalar(hb.scale); lb.applyAxisAngle(new THREE.Vector3(0, 1, 0), hb.facing);

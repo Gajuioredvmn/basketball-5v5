@@ -528,6 +528,7 @@ export function animatePlayer(p, dt) {
       let idX, idZ;
       if (moving && !shuffle) { idX = A * Math.sin(baseZ); idZ = (g.u - 0.2) * half * dirS; } // 落腳點稍微在身體前面一點、蹬地時在後面多一點（像真人）
       else if (moving && shuffle) { idX = side * 0.13 - g.u * half * s2; idZ = 0; } // 腳站寬一點，滑步時兩腳不交叉
+      else if (mode === 'cross' && p.moveT > 0) { const sg = nm === 'L' ? 1 : -1, fr = (p.hand || 1) > 0 ? sg : -sg; idX = sg * 0.2; idZ = fr * 0.3; } // 胯下：前後跨開一大步、兩腳也張開，球才穿得過去
       else { idX = A * Math.sin(baseZ); idZ = fwdOf(nm === 'L' ? P.hipL : P.hipR, kn, baseZ); }
       const hx = side * 0.105, hipWX = p.pos.x + (cy * hx) * sc, hipWZ = p.pos.z + (-sy * hx) * sc;
       const toW = (x, z) => [hipWX + (cy * x + sy * z) * sc, hipWZ + (-sy * x + cy * z) * sc];
@@ -547,7 +548,7 @@ export function animatePlayer(p, dt) {
         const reach = Math.abs(lz - idZ) > 0.3 || Math.abs(lx - idX) > 0.3; // 跟步態要求的位置差太多（被撞、急轉）才重新落腳
         const dYaw = Math.atan2(Math.sin(F.yaw - yawW), Math.cos(F.yaw - yawW));
         // 身體轉超過約 35 度：踩著的腳跟著跨一步轉過去（不在地上扭轉腳掌）
-        if (reach || (Math.abs(dYaw) > 0.6 && (!ft[1 - i].step || Math.abs(dYaw) > 0.75)) || (!moving && Math.hypot(lx - idX, lz - idZ) > 0.2 && !ft[1 - i].step)) { F.on = false; F.step = { t: 0, fx: F.x, fz: F.z }; }
+        if (reach || (Math.abs(dYaw) > 0.6 && (!ft[1 - i].step || Math.abs(dYaw) > 0.75)) || (!moving && Math.hypot(lx - idX, lz - idZ) > 0.2 && (!ft[1 - i].step || mode === 'cross'))) { F.on = false; F.step = { t: 0, fx: F.x, fz: F.z }; }
         p._ankYaw[i] = F.on ? Math.max(-0.7, Math.min(0.7, dYaw)) : 0; // 腳掌方向也鎖住（轉身時以腳為軸）
       } else { F.on = false; F.toeOff = false; }
       if (moving && !F.on && !F.step) lift = Math.max(lift, g.lift);
