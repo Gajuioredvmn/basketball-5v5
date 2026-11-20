@@ -1,6 +1,7 @@
 // 場邊人物：啦啦隊（6 人）與吉祥物
 // 比賽進行中：啦啦隊站在遠側兩個底線角落（場外）、吉祥物在遠側底線籃架旁走動
 // 暫停時：跑到中場圈附近排隊形跳舞，吉祥物在最前面翻跟斗
+import { ambient } from './ambient.js';
 import * as THREE from 'three';
 import { HX, HZ } from './const.js';
 import { makePlayerMesh, animatePlayer } from './player.js';
@@ -57,6 +58,10 @@ export function createExtras(scene, { dancers = true } = {}) {
           a.facing = Math.atan2(-a.pos.x, -a.pos.z); // 面向球場中心
           a.pose = a.cheerT > 0 ? (a.kind === 'mascot' ? 'wave' : 'cheer') : (a.kind === 'mascot' ? (Math.sin(performance.now() * 0.0007) > 0.6 ? 'wave' : 'idle') : 'idle');
         }
+        // 真人動作：表演時跳舞（上半身）、比賽中站在底線看球（上半身真人待機動作）
+        if (a.kind !== 'mascot' && a.pose === 'dance') ambient(a, dt, 'dance', 0);
+        else if (a.pose === 'idle') ambient(a, dt, 'idle', 0);
+        else ambient(a, dt, null);
         animatePlayer(a, dt);
         // 吉祥物後空翻：身體繞骨盆翻一圈，同時往上跳
         if (a.flip > 0) {

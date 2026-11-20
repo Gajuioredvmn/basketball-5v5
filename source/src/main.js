@@ -6,6 +6,8 @@ import { makePlayerMesh, makeReflection, animatePlayer, handWorld, jerseyTexture
 import { initAudio, sfx, setMuted } from './audio.js';
 import { createExtras } from './extras.js';
 import { createJumbotron } from './jumbotron.js';
+import { MOCAP_GROUPS as GRP } from './mocapData.js';
+import { ambient } from './ambient.js';
 
 const params = new URLSearchParams(location.search);
 const store = { get(k, d) { try { const v = localStorage.getItem('bb5v5.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('bb5v5.' + k, JSON.stringify(v)); } catch (e) { } } };
@@ -330,11 +332,11 @@ function handBall(p) {
     if (u < 0.5) out.copy(a).lerp(mid, u / 0.5); else out.copy(mid).lerp(b, (u - 0.5) / 0.5);
     if (u >= 0.5 && !p.crossBounced) { p.crossBounced = true; sfx.dribble(isUser(p) ? 0.9 : 0.5); }
     if (u < 0.5) p.crossBounced = false;
-  } else if (pose === 'cross' && p.moveT > 0) {
-    // 胯下：從原本那隻手往下，從兩腳中間彈地，再到另一隻手
+  } else if ((pose === 'cross' || pose === 'xover') && p.moveT > 0) {
+    // 胯下：從兩腳中間彈地；換手運球（Crossover）：在身體前方彈地，換到另一隻手
     const u = 1 - p.moveT / (p.moveDur || 0.42);
     const side = (q, lat, fw, y) => new THREE.Vector3(p.pos.x + r.x * lat * s * q + f.x * fw * s, y, p.pos.z + r.z * lat * s * q + f.z * fw * s);
-    const a = side(-1, 0.3, 0.28, 0.8 * s), mid = side(1, 0, 0.02, BALL_R), b = side(1, 0.3, 0.28, 0.82 * s);
+    const a = side(-1, 0.3, 0.28, 0.8 * s), mid = side(1, 0, pose === 'xover' ? 0.42 : 0.02, BALL_R), b = side(1, 0.3, 0.28, 0.82 * s);
     if (u < 0.5) out.copy(a).lerp(mid, u / 0.5); else out.copy(mid).lerp(b, (u - 0.5) / 0.5);
     if (u >= 0.5 && !p.crossBounced) { p.crossBounced = true; sfx.dribble(isUser(p) ? 0.9 : 0.5); }
     if (u < 0.5) p.crossBounced = false;
@@ -440,45 +442,106 @@ function shotWindow(p, d, cd, three, moving) {
   w *= 0.85 + 0.15 * p.sta;
   return clamp(w, 0.025, 0.09);
 }
-// ---- 真人動作：跳投、運球用 CMU 動作捕捉，依遊戲的時間軸對齊播放 ----
+// ---- 真人動作（CMU、SkillMimic、Quaternius）：依遊戲的時間軸對齊播放 ----
+// 每位球員固定一種投籃／運球風格；搶籃板、接球、撿球、轉身等每次隨機挑一個版本
+const styleOf = (p, grp, k = 0) => { const g = GRP[grp]; return g[((p.num || 0) * 7 + p.team * 3 + k) % g.length]; };
+function vClip(p, key, grp) { p._var = p._var || {}; p._vUsed[key] = 1; return p._var[key] || (p._var[key] = Array.isArray(grp) ? grp[(Math.random() * grp.length) | 0] : GRP[grp][(Math.random() * GRP[grp].length) | 0]); }
+const span = (c, a, b, u) => a + clamp(u, 0, 1) * (b - a); // 片段第 a 幀到第 b 幀之間
+function react(p, name, legs = 0, from = 0, to = null, dur = null) { const c = clipInfo(name); if (!c) return; to = to == null ? c.n - 1 : to; p.react = { name, from, to, t: 0, dur: dur || (to - from) / 30, legs }; }
+let RUN_OFS = 0.5; // 真人跑步片段跟程式腳步的相位差（實測：0.5 時手腳交錯正確）
 function mocapFor(p, dt) {
   let want = null;
+  p._vUsed = {};
   const spd = hyp(p.vel.x, p.vel.z), jv0 = p.jv0 || 1;
-  // 移動方向跟面向差太多（側移、後退）時不用真人走路／運球片段，免得腳往前踩、身體往旁邊移
-  const straight = spd < 0.3 || (p.vel.x * Math.sin(p.facing) + p.vel.z * Math.cos(p.facing)) / spd > 0.88;
+  if (spd > 1) { const hd = Math.atan2(p.vel.x, p.vel.z), dh = p._hd == null ? 0 : Math.atan2(Math.sin(hd - p._hd), Math.cos(hd - p._hd)); p._hd = hd; p.yawRate = (p.yawRate || 0) * 0.85 + 0.15 * dh / Math.max(dt, 1e-3); } else { p._hd = null; p.yawRate = 0; }
+  if ((p.lastMoveT = (p.lastMoveT || 0) - dt) <= 0) p.lastMove = null;
+  const fx = Math.sin(p.facing), fz = Math.cos(p.facing), fw = spd > 0.3 ? (p.vel.x * fx + p.vel.z * fz) / spd : 1, lat = spd > 0.3 ? (p.vel.x * -fz + p.vel.z * fx) / spd : 0;
+  const straight = spd < 0.3 || fw > 0.88;
+  const inAir = p.jy > 0.001 || p.jv > 0;
+  const mir = (p.hand || 1) < 0;
   // 空中三段：上升（起跳→最高點）、下降（最高點→落地）
   const airF = (a, top, land) => p.jv > 0 ? a + clamp(1 - p.jv / jv0, 0, 1) * (top - a) : top + clamp(-p.jv / jv0, 0, 1) * (land - top);
+  const jumpMap = (name, prepT) => { const c = clipInfo(name), ev = c.ev, land = ev.land > ev.release ? ev.land : Math.min(c.n - 1, ev.release + 5), pre = Math.max(0, ev.takeoff - 16);
+    if (!p.jv0 && p.jy <= 0.001) return { name, f: span(c, pre, ev.takeoff, p.actT / prepT) }; // 下蹲蓄力
+    if (inAir) return { name, f: airF(ev.takeoff, ev.release, land) };
+    return { name, f: land + clamp(1 - Math.max(0, p.landT) / 0.18, 0, 1) * Math.min(8, c.n - 1 - land) }; };
+  // 抓到球的那一刻：把剛才那段動作從「抓到」播到結束（收球）
+  if (ball.holder === p && !p._hadBall && p._reach) { const c = clipInfo(p._reach); react(p, p._reach, 0, c.ev.grab, Math.min(c.n - 1, c.ev.grab + 14)); }
+  p._hadBall = ball.holder === p; p._reach = null;
   if (p.action === 'shoot' && p.shotKind === 'jump') {
-    const ev = clipInfo('jumpshot').ev; let f;
-    if (!p.jv0 && p.jy <= 0.001) f = 12 + clamp(p.actT / 0.2, 0, 1) * (ev.takeoff - 12); // 下蹲蓄力
-    else if (p.jy > 0.001 || p.jv > 0) f = airF(ev.takeoff, ev.release, ev.land);
-    else f = ev.land + clamp(1 - Math.max(0, p.landT) / 0.18, 0, 1) * 8; // 落地緩衝
-    want = { name: 'jumpshot', f };
+    want = jumpMap(p.shotClip || (p.shotClip = styleOf(p, 'shot')), 0.2);
+  } else if (p.action === 'shoot' && p.shotKind === 'hook') {
+    want = jumpMap('hook', 0.25); want.mirror = (p.hookSide || 1) < 0;
+  } else if (p.action === 'ftshoot') {
+    const c = clipInfo('ft'), rel = c.ev.release; want = { name: 'ft', f: span(c, rel - 26, rel, p.actT / 0.6), legs: 0 };
   } else if (p.action === 'gather' || p.action === 'layup') {
-    const c = clipInfo('layup'), ev = c.ev, top = ev.takeoff + 3;
-    const f = p.action === 'gather' ? ev.takeoff - 7 + clamp(p.actT / 0.2, 0, 1) * 7 : (p.jy > 0.001 || p.jv > 0) ? airF(ev.takeoff, top, ev.land) : ev.land + 3;
-    want = { name: 'layup', f };
+    const name = vClip(p, 'layup', p.lastMove === 'spin' ? ['turnLayup'] : GRP.layup), c = clipInfo(name), ev = c.ev, top = ev.release > ev.takeoff ? ev.release : ev.takeoff + 3, land = ev.land > top ? ev.land : Math.min(c.n - 1, top + 5);
+    const f = p.action === 'gather' ? ev.takeoff - 7 + clamp(p.actT / 0.2, 0, 1) * 7 : inAir ? airF(ev.takeoff, top, land) : land + 3;
+    want = { name, f };
   } else if (p.action === 'rebound' || (ball.holder === p && p.pose === 'secure')) {
-    const c = clipInfo('rebound'), ev = c.ev, top = ev.grab + 1;
+    const name = vClip(p, 'reb', 'rebound'), c = clipInfo(name), ev = c.ev, top = ev.grab + 1;
     let f;
-    if (p.action === 'rebound' && (p.jy > 0.001 || p.jv > 0)) f = airF(ev.takeoff, top, ev.land);
+    if (p.action === 'rebound' && inAir) f = airF(ev.takeoff, top, ev.land);
     else if (p.pose === 'secure') f = ev.land + clamp(1 - Math.max(0, p.secureT) / 0.55, 0, 1) * (c.n - 1 - ev.land);
-    if (f != null) want = { name: 'rebound', f };
+    if (f != null) want = { name, f };
   } else if (p.pose === 'catch' && ball.pass && ball.pass.to === p) {
-    const ev = clipInfo('catch').ev; want = { name: 'catch', f: ev.grab - clamp((ball.pass.T - ball.pass.t) * 30, 0, ev.grab) };
-  } else if (ball.holder === p && p.pose === 'dribble' && !(p.moveT > 0) && straight) {
-    // 不滑步的原則：腳用真人動作時，播放速度＝實際移動速度÷片段的步行速度（腳踩地時相對地面不動）
-    const cw = clipInfo('dribble'), cr = clipInfo('drun');
-    // 腳一律用程式步態（踩地時腳掌完全不動），真人動作只用在上半身（運球的手、身體）
-    const fast = p.mo && p.mo.name === 'drun' ? spd > cr.speed * 0.72 : spd > cw.speed * 1.75;
-    if (fast) { p.moDrun = (p.moDrun || 0) + dt * 30 * Math.max(0.8, spd / cr.speed); want = { name: 'drun', f: p.moDrun, mirror: (p.hand || 1) < 0, legs: 0 }; }
-    else { p.moDrib = (p.moDrib || 0) + dt * 30 * Math.max(0.85, spd / cw.speed); want = { name: 'dribble', f: p.moDrib, mirror: (p.hand || 1) < 0, legs: 0 }; }
+    const name = vClip(p, 'catch', 'catch'), ev = clipInfo(name).ev; want = { name, f: ev.grab - clamp((ball.pass.T - ball.pass.t) * 30, 0, ev.grab), legs: 0 }; p._reach = name;
+  } else if (p.action === 'pass' && (p.passKind || 'passC') === 'passC') {
+    const c = clipInfo('pass'), rel = c.ev.release; want = { name: 'pass', f: p.actT < 0.1 ? span(c, rel - 6, rel, p.actT / 0.1) : Math.min(c.n - 1, rel + (p.actT - 0.1) * 30), legs: 0, mirror: mir };
+  } else if (ball.holder === p && p.moveT > 0 && p.moveKind && p.moveKind !== 'stepback') {
+    // 運球招式：真人 Crossover、胯下、背後、轉身、假動作
+    const u = 1 - p.moveT / (p.moveDur || 0.42), k = p.moveKind;
+    let name, a, b;
+    if (k === 'xover') { name = vClip(p, 'mv', spd > 3 ? ['xoverRun'] : ['xover1', 'xover2', 'xoverRun']); const c = clipInfo(name), sw = c.ev.sw; a = Math.max(0, sw - 12); b = Math.min(c.n - 1, sw + 10); }
+    else if (k === 'cross') { name = 'legturn'; const sw = clipInfo(name).ev.sw; a = sw - 12; b = sw + 10; }
+    else if (k === 'behind') { name = 'behind'; const sw = clipInfo(name).ev.sw; a = sw - 14; b = sw + 10; }
+    else if (k === 'spin') { name = vClip(p, 'mv', 'spin'); const c = clipInfo(name); a = c.n * 0.3; b = c.n * 0.85; }
+    else if (k === 'hesi') { name = (p.spinDir || 1) > 0 ? 'feintR' : 'feintL'; const c = clipInfo(name); a = c.n * 0.2; b = c.n * 0.8; }
+    if (name) want = { name, f: a + u * (b - a), legs: 0, mirror: mir && k !== 'hesi', spine: 0.5 };
+  } else if (ball.holder === p && p.pose === 'dribble') {
+    // 不滑步的原則：腳一律用程式步態（踩地時腳掌完全不動），真人動作只用在上半身（運球的手、身體）
+    const [, cd] = nearestOpp(p);
+    const turning = Math.abs(p.yawRate || 0) > 1.6;
+    if (spd > 2.6 && straight) {
+      const name = turning ? vClip(p, 'drunT', 'drunTurn') : (p.drunClip || (p.drunClip = styleOf(p, 'drun'))), c = clipInfo(name);
+      p.moDrun = (p.moDrun || 0) + dt * 30 * Math.max(0.8, spd / (c.speed || 3)); want = { name, f: p.moDrun, mirror: turning ? (p.yawRate || 0) < 0 : mir, legs: 0, spine: 0.6 };
+    } else {
+      let name;
+      if (spd > 0.5 && fw < -0.5) name = p.dribBack || (p.dribBack = styleOf(p, 'dribBack'));
+      else if (spd > 0.5 && !straight) name = p.dribSide || (p.dribSide = styleOf(p, 'dribSide'));
+      else if (cd < 1.25) name = 'dribLow'; // 防守者貼身時壓低運球護球
+      else name = p.dribClip || (p.dribClip = styleOf(p, 'dribble'));
+      const c = clipInfo(name); p.moDrib = (p.moDrib || 0) + dt * 30 * Math.max(0.85, spd / (c.speed || 1.4));
+      want = { name, f: p.moDrib, mirror: name.startsWith('dribSide') ? (lat < 0) !== mir : mir, legs: 0 };
+    }
+    want.lp = true;
+    // 從慢速突然加速＝切入：上半身用真人切入的第一步（往左／往右／直線）
+    if (spd < 1.5) p._slowT = 0; else p._slowT = (p._slowT || 0) + dt;
+    if (spd > 3 && p._slowT < 0.35 && !p.react && S.phase === 'live') { const nm = lat > 0.35 ? (Math.random() < 0.5 ? 'driveL' : 'goLeft') : lat < -0.35 ? (Math.random() < 0.5 ? 'driveR' : 'goRight') : 'drive0'; const c = clipInfo(nm); react(p, nm, 0, c.n * 0.15, c.n * 0.6, 0.7); p._slowT = 9; }
+  } else if (ball.holder === p && p.pose === 'hold' && spd < 0.4 && S.phase === 'live') {
+    p.moPiv = (p.moPiv || 0) + dt * 30; const c = clipInfo('pivot'); want = { name: 'pivot', f: p.moPiv % (c.n - 1), legs: 0, lp: true }; // 停球後拿著球找人（真人軸心腳上半身）
+  } else if (!p.action && p.jy === 0 && ball.holder !== p && ball.state === 'loose' && hyp(ball.pos.x - p.pos.x, ball.pos.z - p.pos.z) < 1.6 && (ball.pos.y < 0.75 || (ball.pos.y > 1.4 && ball.pos.y < 2.5))) {
+    // 撿地上的球／站著伸手抓球：越接近球，動作越接近「抓到」那一幀
+    const low = ball.pos.y < 0.75, name = vClip(p, low ? 'pick' : 'rebS', low ? 'pick' : 'rebStand'), ev = clipInfo(name).ev, d = hyp(ball.pos.x - p.pos.x, ball.pos.z - p.pos.z);
+    want = { name, f: ev.grab - clamp((d - 0.5) / 1.1, 0, 1) * Math.min(ev.grab, 18), legs: 0 }; p._reach = name;
+  } else if (p.pose === 'defense' && ball.holder && ball.holder.team !== p.team && S.phase === 'live') {
+    const name = p.defClip || (p.defClip = styleOf(p, 'def')); p.moDef = (p.moDef || 0) + dt * 30 * (0.4 + Math.min(1, spd / 2.5) * 0.6);
+    const c = clipInfo(name); want = { name, f: c.n * 0.15 + (p.moDef % (c.n * 0.7)), legs: 0, lp: true };
   } else if (ball.holder !== p && p.pose === 'run' && !p.action && p.jy === 0 && spd > 0.45 && spd < 1.9 && straight) {
-    // 慢走（例如死球時走回位置）用 Quaternius 走路，同樣照速度播放
-    const c = clipInfo('walk'); p.moWalk = (p.moWalk || 0) + dt * 30 * (spd / c.speed); want = { name: 'walk', f: p.moWalk, legs: 0 };
+    // 慢走用 Quaternius 走路，照速度播放
+    const c = clipInfo('walk'); p.moWalk = (p.moWalk || 0) + dt * 30 * (spd / c.speed); want = { name: 'walk', f: p.moWalk, legs: 0, lp: true };
+  } else if (ball.holder !== p && p.pose === 'run' && !p.action && p.jy === 0 && spd > 4 && straight) {
+    // 無球快跑：真人跑步的上半身，跟腳步同一個節奏（左腳踩地時右手在前）
+    const c = clipInfo('runLoop'); want = { name: 'runLoop', f: c.n * ((((p.runPhase / (2 * Math.PI)) + RUN_OFS) % 1 + 1) % 1), legs: 0, lp: true, spine: 0.7 };
+  } else if (!p.action && p.jy === 0 && spd < 0.4 && (S.phase === 'dead' || S.phase === 'timeout' || S.phase === 'inbound' || S.phase === 'ft') && p.pose === 'idle') {
+    // 死球、罰球時站著：待機、抱胸、聊天（每人固定一種）
+    const name = ['idle', 'foldArms', 'idleTalk'][((p.num || 0) + p.team) % 3]; p.moIdle = (p.moIdle || Math.random() * 60) + dt * 30; want = { name, f: p.moIdle, legs: 0, lp: true };
   }
-  // 跳投、上籃、搶籃板、接球：只有在空中才用真人動作的腳；踩在地上時用程式算的腳（不會因為真人有移動而滑步）
-  if (want && want.legs == null) { const inAir = p.jy > 0.001 || p.jv > 0; p.moLegs = (p.moLegs || 0) + ((inAir ? 1 : 0) - (p.moLegs || 0)) * Math.min(1, dt * 20); want.legs = p.moLegs; }
+  // 一次性的反應動作（被犯規、抗議、點頭、罰球出手後的跟隨）
+  if (p.react) { const r = p.react; r.t += dt; if (r.t > r.dur) p.react = null; else if (!want || want.lp) want = { name: r.name, f: r.from + (r.to - r.from) * (r.t / r.dur), legs: r.legs }; }
+  for (const k in p._var) if (!p._vUsed[k]) p._var[k] = null;
+  // 跳投、上籃、搶籃板：只有在空中才用真人動作的腳；踩在地上時用程式算的腳（不會因為真人有移動而滑步）
+  if (want && want.legs == null) { p.moLegs = (p.moLegs || 0) + ((inAir ? 1 : 0) - (p.moLegs || 0)) * Math.min(1, dt * 20); want.legs = p.moLegs; }
   const target = want ? 1 : 0;
   if (want && p.mo && p.mo.name !== want.name) p.moW = Math.min(p.moW || 0, 0.35); // 換片段時淡入，避免跳動
   p.moW = (p.moW || 0) + (target - (p.moW || 0)) * Math.min(1, dt * (want ? 14 : 9));
@@ -783,7 +846,7 @@ function doMove(p, kind, side) {
       const along = inp.x * B.x + inp.z * B.z, lat = inp.x * L.x + inp.z * L.z; side = Math.sign(lat) || 1;
       if (along < -0.3 && Math.abs(lat) > 0.4) kind = 'behind';
       else if (along < -0.5) kind = 'stepback';
-      else if (Math.abs(lat) > 0.45) kind = 'cross';
+      else if (Math.abs(lat) > 0.45) kind = along < -0.1 ? 'cross' : 'xover';
       else if (along > 0.6) kind = 'hesi';
       else kind = 'spin';
     }
@@ -791,9 +854,11 @@ function doMove(p, kind, side) {
   side = side || (Math.random() < 0.5 ? 1 : -1);
   // 靠近邊線時往場內做
   { const test = p.pos.clone().addScaledVector(L, side * 2.2); if (Math.abs(test.z) > HZ - 0.4 || Math.abs(test.x) > HX - 0.4) side = -side; }
-  if (kind === 'cross') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; p.moveVel.copy(L).multiplyScalar(side * 5.2).addScaledVector(B, 1.2); p.moveKind = 'cross'; if (isUser(p)) showShotLabel('胯下運球', true); }
+  p.lastMove = kind; p.lastMoveT = 1.2;
+  if (kind === 'xover') { p.hand = -p.hand; p.moveT = p.moveDur = 0.38; p.moveVel.copy(L).multiplyScalar(side * 5.4).addScaledVector(B, 1.4); p.moveKind = 'xover'; if (isUser(p)) showShotLabel('換手運球', true); }
+  else if (kind === 'cross') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; p.moveVel.copy(L).multiplyScalar(side * 5.2).addScaledVector(B, 1.2); p.moveKind = 'cross'; if (isUser(p)) showShotLabel('胯下運球', true); }
   else if (kind === 'behind') { p.hand = -p.hand; p.moveT = p.moveDur = 0.42; p.moveVel.copy(L).multiplyScalar(side * 5.0).addScaledVector(B, 1.0); p.moveKind = 'behind'; if (isUser(p)) showShotLabel('背後運球', true); }
-  else if (kind === 'hesi') { p.moveT = p.moveDur = 0.55; p.moveB = B.clone(); p.moveVel.copy(B).multiplyScalar(0.8); p.moveKind = 'hesi'; if (isUser(p)) showShotLabel('猶豫步', true); }
+  else if (kind === 'hesi') { p.moveT = p.moveDur = 0.55; p.moveB = B.clone(); p.moveVel.copy(B).multiplyScalar(0.8); p.moveKind = 'hesi'; p.spinDir = side; if (isUser(p)) showShotLabel('猶豫步', true); }
   else if (kind === 'spin') { if (isUser(p)) showShotLabel('轉身', true); p.moveT = p.moveDur = 0.45; p.moveVel.copy(L).multiplyScalar(side * 3.4).addScaledVector(B, 3.0); p.moveKind = 'spin'; p.spinDir = side; }
   else { if (isUser(p)) showShotLabel('後撤步', true); p.moveT = p.moveDur = 0.32; p.moveVel.copy(B).multiplyScalar(-4.2); p.moveKind = 'stepback'; p.openT = 0.9; if (S.fc && Math.abs(p.pos.x) < 2.2) p.moveVel.multiplyScalar(0.2); }
   if (isUser(p)) tutEv('move');
@@ -810,6 +875,9 @@ function callFoul(def, off, kind, nShots, andMaybe) {
   if (S.phase !== 'live') return;
   sfx.whistle();
   def.st.pf++; S.stats[def.team].pf++;
+  // 被犯規的人被撞到的反應、犯規的人搖頭抗議
+  if (off && off.jy <= 0.001) react(off, kind === 'charge' ? 'hitBack' : Math.random() < 0.5 ? 'hitChest' : 'hitHead', 0);
+  if (Math.random() < 0.6) { const c = clipInfo('no'); react(def, 'no', 0, 0, c.n - 1, 1.8); }
   const offensive = kind === 'charge';
   if (!offensive) S.teamFouls[def.team]++;
   const pfTxt = `（第 ${def.st.pf} 犯）`;
@@ -888,6 +956,7 @@ function updateFT(dt) {
 function releaseFT(timing) {
   const ft = S.ft, sh = ft.shooter;
   sh.action = 'follow'; sh.actT = 0; sh.released = true;
+  { const c = clipInfo('ft'); react(sh, 'ft', 0, c.ev.release, c.n - 1); } // 罰球出手後的跟隨動作
   let prob = 0.77 * sh.ft * (0.92 + 0.08 * sh.sta);
   if (timing != null) {
     if (timing >= 0.84 && timing <= 0.98) { prob = 0.97; meterFlash('perfect'); }
@@ -944,6 +1013,8 @@ function collideRims() {
   }
 }
 const rimFlex = [0, 0];
+// 每次吹哨，裁判就比一段手勢
+{ const wh = sfx.whistle; sfx.whistle = (...a) => { if (typeof referee !== 'undefined' && referee) { referee.sig = GRP.signal[(Math.random() * GRP.signal.length) | 0]; referee.sigT = 2.6; } return wh(...a); }; }
 const nets = arena.hoops.map((h, i) => ({ net: h.net, t: 0, s: i ? 1 : -1 }));
 function stepBall(dt) {
   ball.rimT -= dt; ball.boardT -= dt;
@@ -953,7 +1024,7 @@ function stepBall(dt) {
     if (h.pose === 'dribble' || h.pose === 'cross') {
       const c = Math.cos(h.dribblePh); if (Math.sign(c) !== Math.sign(h.lastCos || 1) && S.phase !== 'title') sfx.dribble(h === ctrl ? 0.8 : 0.4); h.lastCos = c;
     }
-    ball.pos.lerp(np, h.pose === 'dribble' || h.pose === 'cross' ? 1 : Math.min(1, dt * 18));
+    ball.pos.lerp(np, h.pose === 'dribble' || h.pose === 'cross' || h.pose === 'xover' ? 1 : Math.min(1, dt * 18));
     return;
   }
   if (ball.state === 'toss' && ball.pos.y < 1.75 && ball.vel.y < 0) { ball.vel.set(0, 0, 0); return; }
@@ -1056,6 +1127,7 @@ function scored(s) {
   const team = S.attack[0] === s ? 0 : 1;
   const sh = ball.shot;
   if (sh && sh.kind === 'ft') {
+    react(sh.shooter, 'yes', 0, 0, null, 1.6); // 罰進點頭
     S.score[team] += 1; S.stats[team].ftm++; sh.shooter.st.ftm++; sh.shooter.st.pts++; pbp(`${TEAM_INFO[team].name} ${tag(sh.shooter)} 罰球命中`);
     nets[s > 0 ? 1 : 0].t = 0.9; sfx.swish(); sfx.cheer(team === 0 ? 0.5 : 0.15);
     if (S.phase === 'ft') { S.ft.made = true; ball.state = 'dead'; return; }
@@ -1211,7 +1283,14 @@ function updateBench(dt) {
     }
     if (p.chair < 0) p.pos.copy(benchSeat(p));
     p.cheerT = (p.cheerT || 0) - dt;
-    const c = CHAIRS(t)[p.chair]; const up = p.cheerT > 0; p.pos.set(c.x, 0, c.z + (up ? -0.35 : 0.05)); p.vel.set(0, 0, 0); p.facing = Math.PI; p.pose = up ? 'cheer' : 'sit';
+    const c = CHAIRS(t)[p.chair]; const up = p.cheerT > 0; p.pos.set(c.x, 0, c.z + (up ? -0.35 : 0.05)); p.vel.set(0, 0, 0); p.facing = Math.PI;
+    // 板凳：坐著（有人聊天）、站起來歡呼、再坐下（真人動作；坐著時腿也用真人動作）
+    if (up !== !!p._benchUp) { p._benchUp = up; p._benchTr = up ? 'standUp' : 'sitDown'; p._benchTrT = 0; }
+    p._benchTrT = (p._benchTrT || 0) + dt;
+    const tr = p._benchTr && p._benchTrT < clipInfo(p._benchTr).n / 30 ? p._benchTr : null;
+    if (tr) { p.pose = 'sit'; ambient(p, dt, tr, 1); }
+    else if (up) { if (p.num % 2) { p.pose = 'cheer'; ambient(p, dt, null); } else { p.pose = 'idle'; ambient(p, dt, 'call', 0); } }
+    else { p.pose = 'sit'; ambient(p, dt, (p.num + p.team) % 3 ? 'sit' : 'sitTalk', 1); }
   }
 }
 
@@ -1709,6 +1788,14 @@ function aiHandler(p, dt) {
   const d = distB(p);
   const [nd, cd] = nearestOpp(p);
   const three = isThreeSpot(p.pos.x, p.pos.z, p.team);
+  if (p.pumpT > 0) return p.drive;
+  // 投籃假動作：防守者衝過來補防時，舉球假投（真人動作），防守者有機會被騙跳起來
+  if (!back && !p.post && nd && cd < 1.7 && cd > 0.6 && hyp(nd.vel.x, nd.vel.z) > 2.2 && (three || d < 6.5) && (p.pumpCD || 0) <= 0 && S.shotClock > 4 && Math.random() < 0.3) {
+    p.pumpT = 0.6; p.pumpCD = 5; p.drive = { x: p.pos.x, z: p.pos.z };
+    const nm = Math.random() < 0.5 ? 'pumpR' : 'pumpL', c = clipInfo(nm), fk = c.ev.fake; react(p, nm, 0, Math.max(0, fk - 16), Math.min(c.n - 1, fk + 10), 0.6);
+    if (Math.random() < 0.45 && nd.jy === 0 && !nd.action) { nd.action = 'contest'; nd.actT = 0; jump(nd, 2.6); }
+    return p.drive;
+  }
   if (!back && S.shotClock < 2.2) { startShot(p); return p.drive; }
   if (!back && d < 2.5 && p.holdT > 0.3) { startShot(p); return p.drive; }
   if (back) { const w = toWorld(p.team, 7.5, clamp(p.pos.z * 0.5, -3, 3)); p.drive = { x: w.x, z: w.z, sprint: S.bcT > 3 || Math.random() < 0.5 }; return p.drive; }
@@ -1747,7 +1834,7 @@ function aiHandler(p, dt) {
   const thr = 0.37 + (S.shotClock > 14 ? 0.04 : 0) - (S.shotClock < 7 ? 0.08 : 0) - (three && cd > 1.6 ? 0.05 : 0);
   if ((p.holdT > 0.5 || (p.holdT > 0.2 && cd > 1.7)) && d < 8.4 && cd > 1.0 && q > thr && Math.random() < 0.55) { startShot(p); return p.drive; }
   // 被貼身防守時用運球招式
-  if (cd < 1.3 && p.moveCD <= 0 && Math.random() < 0.22 * p.handle) { doMove(p, ['cross', 'spin', 'stepback', 'behind', 'hesi'][(Math.random() * 5) | 0]); return p.drive; }
+  if (cd < 1.3 && p.moveCD <= 0 && Math.random() < 0.22 * p.handle) { doMove(p, ['xover', 'xover', 'cross', 'spin', 'stepback', 'behind', 'hesi'][(Math.random() * 7) | 0]); return p.drive; }
   for (const t of teams[p.team]) {
     if (t === p || !t.dunk) continue;
     const scr2 = S.screen[t.team];
@@ -1812,7 +1899,7 @@ function updatePlayers(dt) {
     if (ball.holder === p) p.holdT += dt;
     if (!reboundPhase() || p.action) p.boxing = null;
     if (S.phase === 'live') { p.st.sec += dt; p.sta = Math.max(0.05, p.sta - dt * F * (0.0007 + (p.sprint ? 0.0009 : 0))); }
-    p.closeT = (p.closeT || 0) - dt; p.vcutT = (p.vcutT || 0) - dt; p.relocT = (p.relocT || 0) - dt;
+    p.closeT = (p.closeT || 0) - dt; p.vcutT = (p.vcutT || 0) - dt; p.relocT = (p.relocT || 0) - dt; p.pumpT = (p.pumpT || 0) - dt; p.pumpCD = (p.pumpCD || 0) - dt;
     // 無球跑位：被貼身阻絕就往籃下溜（後門切）；站太久就做一次 V 字切出來要球
     if (S.phase === 'live' && S.fc && S.poss === p.team && ball.holder && ball.holder !== p && ball.holder.team === p.team && p.cutting <= 0 && p.vcutT <= 0 && !p.post && !isUser(p)) {
       const g = guardOf(p), hb = ball.holder;
@@ -1820,7 +1907,7 @@ function updatePlayers(dt) {
         const gd = hyp(g.pos.x - p.pos.x, g.pos.z - p.pos.z);
         const deny = gd < 1.2 && ((g.pos.x - p.pos.x) * (hb.pos.x - p.pos.x) + (g.pos.z - p.pos.z) * (hb.pos.z - p.pos.z)) > 0.3;
         if (deny && distB(p) > 4 && Math.random() < dt * 0.7) { p.cutting = 1.6; p.cutSide = clamp(p.pos.z * 0.15, -1, 1); }
-        else if (gd < 1.6 && hyp(p.vel.x, p.vel.z) < 1.2 && distB(p) > 5 && Math.random() < dt * 0.35) p.vcutT = 1.3;
+        else if (gd < 1.6 && hyp(p.vel.x, p.vel.z) < 1.2 && distB(p) > 5 && Math.random() < dt * 0.35) { p.vcutT = 1.3; const nm = Math.random() < 0.5 ? 'evadeL' : 'evadeR', c = clipInfo(nm); react(p, nm, 0, 0, c.n - 1, 1.3); }
       }
     }
     if (p.cutting > 0) p.cutting -= dt;
@@ -1992,7 +2079,7 @@ function updatePlayers(dt) {
     else if (p.boxing && hyp(p.boxing.pos.x - p.pos.x, p.boxing.pos.z - p.pos.z) < 1.3) p.pose = 'boxout';
     else if (ball.holder === p && p.secureT > 0) p.pose = 'secure';
     else if (ball.state === 'pass' && ball.pass && ball.pass.to === p && !ball.pass.lob && ball.pass.T - ball.pass.t < 0.4) p.pose = 'catch';
-    else if (p.moveT > 0 && (p.moveKind === 'cross' || p.moveKind === 'behind')) { p.pose = p.moveKind; p.dribblePh += dt * 14; }
+    else if (p.moveT > 0 && (p.moveKind === 'cross' || p.moveKind === 'behind' || p.moveKind === 'xover')) { p.pose = p.moveKind; p.dribblePh += dt * 14; }
     else if (p.moveT > 0 && p.moveKind === 'hesi' && p.moveT > p.moveDur - 0.25) { p.pose = 'hesi'; p.dribblePh += dt * 9; }
     else if (ball.holder === p) {
       if (S.phase === 'ft') p.pose = 'ftset';
@@ -2091,6 +2178,12 @@ function updateReferee(dt) {
   const fa = Math.atan2(ball.pos.x - referee.pos.x, ball.pos.z - referee.pos.z);
   let da = Math.atan2(Math.sin(fa - referee.facing), Math.cos(fa - referee.facing)); referee.facing += clamp(da, -6 * dt, 6 * dt);
   referee.pose = S.phase === 'tipoff' && S.timer < 0.85 ? 'hold' : (hyp(referee.vel.x, referee.vel.z) > 0.5 ? 'run' : 'idle');
+  // 裁判：吹哨後比手勢（CMU 籃球裁判手勢）、走路、站著
+  { const rs = hyp(referee.vel.x, referee.vel.z); referee.sigT = (referee.sigT || 0) - dt;
+    if (referee.sigT > 0 && referee.pose !== 'hold') ambient(referee, dt, referee.sig, 0);
+    else if (referee.pose === 'run' && rs < 1.9) ambient(referee, dt, 'walkFormal', 0, rs / 1.3);
+    else if (referee.pose === 'idle') ambient(referee, dt, 'idle', 0);
+    else ambient(referee, dt, null); }
 }
 
 // ================= 重播 =================
@@ -2812,5 +2905,5 @@ for (let t = 0; t < 2; t++) roster[t].forEach(p => { if (!p.onCourt) p.pos.copy(
 startTipoff(); S.phase = 'title'; ball.state = 'dead'; ball.pos.set(0, BALL_R, 1);
 camLook.set(0, 0.6, 0);
 if (AUTO) { S.qlen = +(params.get('q') || 60); S.diff = 1; newGame(); }
-window.__g = { THREE, scene, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
+window.__g = { setRunOfs: v => { RUN_OFS = v; }, THREE, scene, referee, doMove, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
 requestAnimationFrame(frame);

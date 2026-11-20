@@ -70,6 +70,89 @@ function bestLoop(frames, minLen, maxLen, hand = 'rhand') {
     const { frames } = retarget(Q + file + '.json'); const seg = frames.slice(0, frames.length - 1);
     clips[name] = { fps: 30, n: seg.length, stand: standY, ball: false, loop: true, speed: speed ? rigSpeed(seg) : undefined, data: pack(seg) };
   } }
+// 8. SkillMimic BallPlay-M 其他全部籃球動作（Apache 2.0）：同類動作做成多個版本，遊戲裡分給不同球員／隨機挑
+const GROUPS = { rebStand: [], rebound: ['rebound'], catch: ['catch'], pick: [], shot: ['jumpshot'], drun: ['drun'], xover: [] };
+{ const files = fs.readdirSync(SM).filter(f => f.endsWith('.json')).sort();
+  const firstContact = (fr, from = 0) => fr.findIndex((f, i) => i >= from && f.contact);
+  const firstFree = (fr, from) => fr.findIndex((f, i) => i > from && !f.contact);
+  let nr = 0, nc = 0, np = 0, skipped = [];
+  for (const f of files) {
+    const { frames } = retarget(SM + f);
+    if (f.startsWith('rebound__')) { if (f === 'rebound__002_025pickle_rebound_1.json') continue;
+      const ev = jumpEvents(frames, 4), grab = firstContact(frames, 1);
+      if (ev.takeoff < 0 || ev.land <= ev.takeoff || grab < ev.takeoff || grab > ev.land + 2) { // 沒跳起來的：站著伸手抓球的版本
+        if (grab >= 4) { const name = 'rebS' + (GROUPS.rebStand.length + 1); put(name, frames.slice(0, Math.min(frames.length, grab + 20)), { ev: { grab } }, true); GROUPS.rebStand.push(name); } else skipped.push(f); continue; }
+      const name = 'reb' + (++nr); put(name, frames, { ev: { ...ev, grab } }, true); GROUPS.rebound.push(name); }
+    else if (f.startsWith('catch__')) { if (f.includes('catch_013')) continue;
+      const grab = firstContact(frames, 1); if (grab < 6) { skipped.push(f); continue; }
+      const name = 'catch' + (++nc); put(name, frames.slice(0, Math.min(frames.length, grab + 16)), { ev: { grab } }, true); GROUPS.catch.push(name); }
+    else if (f.startsWith('pick_40__')) {
+      const grab = firstContact(frames, 1); if (grab < 8) { skipped.push(f); continue; }
+      const name = 'pick' + (++np); put(name, frames.slice(Math.max(0, grab - 24), Math.min(frames.length, grab + 14)), { ev: { grab: Math.min(24, grab) } }, true); GROUPS.pick.push(name); }
+    else if (f.startsWith('shot_style')) { const k = 'ABC'[+f[10] - 1]; const ev = jumpEvents(frames, 4);
+      const rel = firstFree(frames, ev.takeoff > 0 ? ev.takeoff : 0);
+      if (ev.takeoff < 0 || ev.land <= ev.takeoff || rel < 0) { skipped.push(f); continue; }
+      put('shot' + k, frames, { ev: { ...ev, release: rel } }, true); GROUPS.shot.push('shot' + k); }
+    else if (f.startsWith('pass__')) { const rel = firstFree(frames, 3); put('pass', frames.slice(0, Math.min(frames.length, rel + 14)), { ev: { release: rel } }, true); }
+    else if (f.startsWith('turnlayup__') || f.startsWith('turnhook__')) { const ev = jumpEvents(frames, 4); const rel = firstFree(frames, Math.max(0, ev.takeoff));
+      put(f.startsWith('turnhook') ? 'hook' : 'turnLayup', frames, { ev: { ...ev, release: rel } }, true); }
+    else if (f.startsWith('rturn2lhand__')) { // 跑動中右手→左手 Crossover：從換手前的最後一次運球開始
+      const sw = frames.findIndex((fr, i) => i > 30 && fr.ballL && fr.ballL.x > 0); const a = Math.max(0, sw - 14), seg = frames.slice(a, Math.min(frames.length, sw + 14));
+      put('xoverRun', seg, { ev: { sw: sw - a } }, true); GROUPS.xover.push('xoverRun'); }
+    else if (f.startsWith('lleg_style')) { const name = 'xover' + f[10]; // 原地左右換手（兩種風格）
+      const sw = frames.findIndex((fr, i) => i > 2 && fr.ballL && frames[i - 1].ballL && fr.ballL.x > 0 && frames[i - 1].ballL.x <= 0);
+      put(name, frames, { ev: { sw }, loop: true }, true); GROUPS.xover.push(name); }
+    else if (f.startsWith('legturn__')) { const sw = frames.findIndex((fr, i) => i > 3 && fr.ballL && fr.ballL.x > 0); put('legturn', frames, { ev: { sw } }, true); }
+    else if (f.startsWith('back__')) { const sw = frames.findIndex((fr, i) => i > 40 && fr.ballL && fr.ballL.x > 0); const a = Math.max(0, sw - 40); put('behind', frames.slice(a, Math.min(frames.length, sw + 12)), { ev: { sw: sw - a } }, true); }
+    else if (f.startsWith('lrun__') || f.startsWith('rrun__') || (f.startsWith('run__') && !f.includes('pickle_run_3'))) {
+      const b = bestLoop(frames, 14, 40); const seg = frames.slice(b.i, b.j), dist = Math.hypot(frames[b.j].x - frames[b.i].x, frames[b.j].z - frames[b.i].z);
+      const name = f.startsWith('lrun') ? 'drunL' : f.startsWith('rrun') ? 'drunR' : 'drun' + (GROUPS.drun.length + 1);
+      put(name, seg, { loop: true, speed: rigSpeed(seg), stance: stanceSpeed(seg), rootSpeed: dist / (seg.length / 30) }, true); if (/^drun\d/.test(name)) GROUPS.drun.push(name); else (GROUPS.drunTurn = GROUPS.drunTurn || []).push(name); }
+    else if (f.startsWith('turn__')) { /* 跟 rturn2lhand 是同一段資料，略過 */ }
+    else skipped.push(f);
+  }
+  console.error('skipped', skipped);
+}
+// 10. CMU 動作庫裡其他全部籃球動作（06 運球、102 籃球攻防、124 投籃／罰球／上籃、裁判手勢）
+{ const cm = (f, o) => retarget(D + f, o).frames, skipped = [];
+  const loopOf = (fr, mn = 20, mx = 60) => { const b = bestLoop(fr, Math.min(mn, fr.length - 6), mx); return b ? fr.slice(b.i, b.j) : fr; };
+  const addLoop = (name, fr, grp) => { const seg = loopOf(fr); put(name, seg, { loop: true, speed: rigSpeed(seg) }); if (grp) (GROUPS[grp] = GROUPS[grp] || []).push(name); };
+  // 06：走著運球（前進、後退、側移、轉彎、換手、低運球）
+  for (const [n, f, g] of [['dribF2', '06_03', 'dribble'], ['dribF3', '06_04', 'dribble'], ['dribF4', '06_05', 'dribble'], ['dribBack1', '06_06', 'dribBack'], ['dribBack2', '06_07', 'dribBack'],
+    ['dribSide1', '06_08', 'dribSide'], ['dribSide2', '06_09', 'dribSide'], ['dribTurnL', '06_10', 'dribble'], ['dribTurnR', '06_11', 'dribble'], ['dribCross', '06_12', 'dribble'], ['dribLow', '06_13', 'dribLow']])
+    addLoop(n, cm('006/' + f + '.bvh', f === '06_13' ? { to: 600 } : {}), g);
+  GROUPS.dribble.unshift('dribble');
+  // 投籃：跳投／定點投／罰球／上籃
+  const shot = (name, f, grp, pre = 30, post = 14) => { const fr = cm(f); const ev0 = jumpEvents(fr, 10); let rel = -1, m = -1;
+    const a0 = ev0.takeoff > 0 ? ev0.takeoff : 0, a1 = ev0.land > 0 ? ev0.land : fr.length; for (let i = a0; i < a1; i++) if (fr[i].rhand > m) { m = fr[i].rhand; rel = i; }
+    if (ev0.takeoff < 0) { m = -1; for (let i = 0; i < fr.length; i++) if (fr[i].rhand > m) { m = fr[i].rhand; rel = i; } }
+    const st = Math.max(0, (ev0.takeoff > 0 ? ev0.takeoff : rel) - pre), en = Math.min(fr.length, (ev0.land > 0 ? ev0.land : rel) + post), seg = fr.slice(st, en);
+    const sh = x => x < 0 ? -1 : x - st; put(name, seg, { ev: { takeoff: sh(ev0.takeoff), land: sh(ev0.land), release: rel - st } }); if (grp) GROUPS[grp].push(name); return clips[name].ev; };
+  console.error('shots', shot('shotCMU', '006/06_15.bvh', 'shot'), shot('setShot', '124/124_03.bvh', null), shot('setShot2', '006/06_14.bvh', null), shot('ft', '124/124_04.bvh', null, 45, 20));
+  { const fr = cm('124/124_06.bvh'); const ev = jumpEvents(fr, 10); let rel = ev.takeoff, m = -1; for (let i = ev.takeoff; i < ev.land; i++) if (fr[i].rhand > m) { m = fr[i].rhand; rel = i; }
+    const st = Math.max(0, ev.takeoff - 30), seg = fr.slice(st, Math.min(fr.length, ev.land + 14)); put('layupCMU', seg, { ev: { takeoff: ev.takeoff - st, land: ev.land - st, release: rel - st } }); GROUPS.layup = ['layup', 'layupCMU']; }
+  // 102：籃球攻防（持球跑動轉彎、轉身、切入、假動作、投籃假動作、防守滑步、軸心腳）
+  const M102 = { '01': 'drunTurnR1', '02': 'drunTurnL1', '03': 'drunTurnL2', '04': 'drunTurnR2', '05': 'drunStraight', '06': 'drunTurnR3', '07': 'drunTurnL3', '08': 'drunTurnR4', '33': 'drunTurnR5',
+    '10': 'runNoBall', '11': 'spin1', '12': 'spin2', '15': 'spin3', '13': 'goRight', '14': 'goLeft', '16': 'evadeL', '17': 'evadeR', '18': 'feintL', '19': 'feintR', '20': 'pumpR', '21': 'pumpL',
+    '22': 'def1', '23': 'def2', '24': 'def3', '25': 'def4', '26': 'def5', '27': 'def6', '28': 'def7', '29': 'pivot', '30': 'drive0', '31': 'driveR', '32': 'driveL' };
+  for (const [k, name] of Object.entries(M102)) { const fr = cm('102/102_' + k + '.bvh'); let fake = -1, m = -1; for (let i = 0; i < fr.length * 0.7; i++) if (fr[i].rhand > m) { m = fr[i].rhand; fake = i; }
+    if (name.startsWith('drun')) { const seg = loopOf(fr, 14, 40); put(name, seg, { loop: true, speed: rigSpeed(seg) }); } else put(name, fr, { speed: rigSpeed(fr), ev: { fake } });
+    const g = name.replace(/\d+$/, '').replace(/^drunTurn[LR]$/, 'drunTurn').replace(/^drunStraight$/, 'drun'); (GROUPS[g] = GROUPS[g] || []).push(name); }
+  { const fr = cm('102/102_10.bvh'); addLoop('runLoop', fr.slice(6), null); }
+  // 裁判手勢：每段取手動作最多的 3 秒
+  for (const f of ['026/26_02', '027/27_02', '027/27_06', '028/28_01', '028/28_05', '029/29_02', '029/29_07', '030/30_01', '030/30_07', '031/31_01', '031/31_05', '032/32_03', '032/32_07', '040/40_12', '041/41_10', '041/41_11']) {
+    let fr; try { fr = cm(f + '.bvh'); } catch (e) { skipped.push(f); continue; }
+    let best = 0, bi = 0; for (let i = 0; i + 90 < fr.length; i += 15) { let v = 0; for (let j = i; j < i + 90; j++) v += Math.max(fr[j].rhand, fr[j].lhand); if (v > best) { best = v; bi = i; } }
+    const name = 'sig' + ((GROUPS.signal || []).length + 1); put(name, fr.slice(bi, bi + 90)); (GROUPS.signal = GROUPS.signal || []).push(name); }
+  console.error('cmu skipped', skipped);
+}
+// 9. Quaternius 其他用得到的：點頭、搖頭、被撞、蹲著看、坐下／站起、正式走路、喊話
+{ const Q = '/tmp/qtj/'; const standY = clips.idle.stand;
+  for (const [name, file, loop] of [['yes', 'Yes'], ['no', 'Idle_No_Loop', true], ['hitChest', 'Hit_Chest'], ['hitHead', 'Hit_Head'], ['hitBack', 'Hit_Knockback'], 
+    ['sitDown', 'Sitting_Enter'], ['standUp', 'Sitting_Exit'], ['walkFormal', 'Walk_Formal_Loop', true], ['call', 'Idle_Rail_Call', true]]) {
+    const { frames } = retarget(Q + file + '.json'); const seg = loop ? frames.slice(0, frames.length - 1) : frames;
+    clips[name] = { fps: 30, n: seg.length, stand: standY, ball: false, loop: !!loop, data: pack(seg) };
+  } }
 const meta = Object.fromEntries(Object.entries(clips).map(([k, v]) => [k, { ...v, data: v.data.length }]));
 console.log(JSON.stringify(meta, null, 0));
-fs.writeFileSync('src/mocapData.js', '// 真人動作資料（已轉成遊戲骨架），由 tools/build_mocap.mjs 產生\n// 來源：CMU Graphics Lab Motion Capture Database（mocap.cs.cmu.edu，免費使用）、SkillMimic BallPlay-M（github.com/wyhuai/SkillMimic，Apache 2.0）、Quaternius Universal Animation Library 1 & 2（CC0）\nexport const MOCAP_BONES = ' + JSON.stringify(BONES) + ';\nexport const MOCAP = ' + JSON.stringify(clips) + ';\n');
+fs.writeFileSync('src/mocapData.js', '// 真人動作資料（已轉成遊戲骨架），由 tools/build_mocap.mjs 產生\n// 來源：CMU Graphics Lab Motion Capture Database（mocap.cs.cmu.edu，免費使用）、SkillMimic BallPlay-M（github.com/wyhuai/SkillMimic，Apache 2.0）、Quaternius Universal Animation Library 1 & 2（CC0）\nexport const MOCAP_BONES = ' + JSON.stringify(BONES) + ';\nexport const MOCAP = ' + JSON.stringify(clips) + ';\nexport const MOCAP_GROUPS = ' + JSON.stringify(GROUPS) + ';\n');
