@@ -373,6 +373,12 @@ export function animatePlayer(p, dt) {
     P.shRx = -2.85; P.elR = -0.05; P.shLx = -2.85; P.elL = -0.05; P.shLz = -0.12; P.shRz = 0.12; P.hipL = -0.45; P.hipR = -0.25; P.kneeL = 0.6; P.kneeR = 0.45; P.lean = -0.1; P.head = 0.2;
   } else if (mode === 'block' || mode === 'rebound') {
     P.shRx = -3.1; P.elR = -0.05; P.shLx = -3.05; P.elL = -0.05; P.shLz = 0.15; P.shRz = -0.15; P.lean = 0;
+  } else if (mode === 'secure') { // 抓籃板：先在接到球的高度雙手抓住（高球在頭上），再拉到下巴、手肘往外撐護球
+    const t = 0.55 - (p.secureT || 0), hi = p.secureHi;
+    P.look = false;
+    if (t < 0.18 && hi) { P.shRx = P.shLx = -2.85; P.elR = P.elL = -0.45; P.shRz = -0.3; P.shLz = 0.3; P.wrR = P.wrL = 0.3; }
+    else if (t < 0.12) { const a = -Math.max(0.9, Math.min(2.4, ((p.secureY || 1.2) - 0.6) * 1.6)); P.shRx = P.shLx = a; P.elR = P.elL = -0.5; P.shRz = -0.28; P.shLz = 0.28; P.kneeL += 0.3; P.kneeR += 0.3; P.lean += 0.15; }
+    else { P.shRx = P.shLx = -1.25; P.elR = P.elL = -2.0; P.shRz = -0.75; P.shLz = 0.75; P.wrR = P.wrL = 0.2; P.kneeL += 0.35; P.kneeR += 0.35; P.hipL -= 0.2; P.hipR -= 0.2; P.lean += 0.2; P.hipLz = 0.18; P.hipRz = -0.18; }
   } else if (mode === 'steal') {
     P.shRx = -1.55; P.elR = 0; P.shRz = 0.2; P.shLx = -0.4; P.lean = 0.38; P.kneeL += 0.45; P.kneeR += 0.45;
   } else if (mode === 'contest') {

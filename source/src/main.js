@@ -325,6 +325,8 @@ function giveBall(p, how) {
   const changed = p.team !== S.poss, wasShot = ball.state === 'shot' || ball.missed;
   if (wasShot && how === 'rebound' && p.team === 1 && ball.lastTeam === 0 && S.phase === 'live') sfx.groan();
   const passer = ball.pass ? ball.pass.from : null;
+  // 搶到籃板／地上的球：雙手抓住，高球先舉在頭上再收到下巴（不是用胸口接）
+  if (how === 'rebound' || how === 'loose') { p.secureT = 0.55; p.secureHi = ball.pos.y > 1.95 * p.scale + p.jy; p.secureY = ball.pos.y - p.jy; }
   if (wasShot && how === 'rebound' && S.phase === 'live') { if (p.team === ball.lastTeam) { S.stats[p.team].oreb = (S.stats[p.team].oreb || 0) + 1; if (Math.random() < 0.6) say(pick(['進攻籃板！', '搶下進攻籃板，二次進攻！', `${p.num}號 搶到進攻籃板`]), 1); } else if (p.boxing && Math.random() < 0.3) say(pick(['卡位漂亮，籃板到手', '防守籃板']), 1); }
   ball.state = 'held'; ball.holder = p; ball.shot = null; ball.pass = null; ball.lastTeam = p.team; ball.vel.set(0, 0, 0);
   p.holdT = 0; p.decT = rand(0.2, 0.4); p.dribblePh = 0;
@@ -1708,7 +1710,7 @@ function updatePlayers(dt) {
   }
   const F = 720 / S.qlen;
   for (const p of players) {
-    p.slowT -= dt; p.stealCD -= dt; p.noGrabT -= dt; p.landT -= dt; p.moveCD -= dt; p.openT -= dt; p.boxedT = (p.boxedT || 0) - dt; p.beatBoxT = (p.beatBoxT || 0) - dt;
+    p.slowT -= dt; p.stealCD -= dt; p.noGrabT -= dt; p.landT -= dt; p.moveCD -= dt; p.openT -= dt; p.boxedT = (p.boxedT || 0) - dt; p.beatBoxT = (p.beatBoxT || 0) - dt; p.secureT = (p.secureT || 0) - dt;
     if (ball.holder === p) p.holdT += dt;
     if (!reboundPhase() || p.action) p.boxing = null;
     if (S.phase === 'live') { p.st.sec += dt; p.sta = Math.max(0.05, p.sta - dt * F * (0.0007 + (p.sprint ? 0.0009 : 0))); }
@@ -1763,7 +1765,14 @@ function updatePlayers(dt) {
         if (sh) { const d = hyp(sh.pos.x - p.pos.x, sh.pos.z - p.pos.z); if (d < 1.6 && !p.action && jump(p, 3.3 + p.blk * 0.35)) p.action = 'block'; else if (!p.action) { p.action = 'contest'; p.actT = 0; } }
       }
     }
-    if (!user && !p.action && S.phase === 'live' && (ball.state === 'loose' || (ball.state === 'shot' && ball.missed)) && ball.vel.y < 0 && ball.pos.y > 2.2 && ball.pos.y < 3.6 && hyp(ball.pos.x - p.pos.x, ball.pos.z - p.pos.z) < 1.0) { if (jump(p, 3.2 + p.reb * 0.3)) { p.action = 'rebound'; p.actT = 0; } }
+    if (!user && !p.action && S.phase === 'live' && (ball.state === 'loose' || (ball.state === 'shot' && ball.missed)) && ball.pos.y > 1.6) {
+      // 抓時機起跳：算球在自己跳到最高點那一刻會掉到多高，剛好在手搆得到的高度才跳
+      const v0 = 3.2 + p.reb * 0.3, vj = v0 * PGK * (0.9 + 0.1 * p.sta) * Math.sqrt(p.jmp || 1), ta = vj / PG;
+      const reach = 2.45 * p.scale + vj * vj / (2 * PG) + 0.15;
+      const yb = ball.pos.y + ball.vel.y * ta - 0.5 * G * ta * ta;
+      const bx2 = ball.pos.x + ball.vel.x * ta, bz2 = ball.pos.z + ball.vel.z * ta;
+      if (yb < reach + 0.05 && yb > reach - 0.6 && hyp(bx2 - p.pos.x, bz2 - p.pos.z) < 0.9 && jump(p, v0)) { p.action = 'rebound'; p.actT = 0; p.vel.set((bx2 - p.pos.x) / ta * 0.6, 0, (bz2 - p.pos.z) / ta * 0.6); }
+    }
     if (user && S.phase === 'live') {
       if (ball.holder === p) {
         if (inp.b1Down) startShot(p);
@@ -1879,6 +1888,7 @@ function updatePlayers(dt) {
     else if (p.action === 'pass') p.pose = p.passKind || 'passC';
     else if (p.action) p.pose = p.action === 'rebound' ? 'rebound' : p.action;
     else if (p.boxing && hyp(p.boxing.pos.x - p.pos.x, p.boxing.pos.z - p.pos.z) < 1.3) p.pose = 'boxout';
+    else if (ball.holder === p && p.secureT > 0) p.pose = 'secure';
     else if (ball.state === 'pass' && ball.pass && ball.pass.to === p && !ball.pass.lob && ball.pass.T - ball.pass.t < 0.4) p.pose = 'catch';
     else if (p.moveT > 0 && (p.moveKind === 'cross' || p.moveKind === 'behind')) { p.pose = p.moveKind; p.dribblePh += dt * 14; }
     else if (p.moveT > 0 && p.moveKind === 'hesi' && p.moveT > p.moveDur - 0.25) { p.pose = 'hesi'; p.dribblePh += dt * 9; }
@@ -2499,6 +2509,8 @@ function render(dt) {
     } else if (['hold', 'ftset', 'shoot', 'pass', 'euro', 'gather', 'passC', 'passB', 'passO', 'passQ'].includes(pose)) {
       vis = handWorld(hb.rig, true).add(handWorld(hb.rig, false)).multiplyScalar(0.5).addScaledVector(fwd(hb), 0.08 * hb.scale);
       if (pose === 'shoot') vis.y += 0.07;
+    } else if (['secure', 'rebound', 'block', 'catch'].includes(pose)) { // 雙手捧球：球在兩手掌中間、稍微往前
+      vis = handWorld(hb.rig, true).add(handWorld(hb.rig, false)).multiplyScalar(0.5).addScaledVector(fwd(hb), 0.05 * hb.scale);
     } else if (pose === 'layup') vis = handWorld(hb.rig, true).add(new THREE.Vector3(0, 0.1, 0));
     else if (pose === 'dunk' || pose === 'windmill' || pose === 'clutch') {
       const two = pose === 'clutch' || (hb.dunk && hb.dunk.style === 'two');
