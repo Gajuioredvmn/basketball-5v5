@@ -329,17 +329,21 @@ export function animatePlayer(p, dt) {
   const va = Math.atan2(-lat, fw); // 移動方向相對面向的角度（正＝往左）
   const back = spd > 0.6 && !shuffle && Math.abs(va) > 1.95;
   const legYaw = back ? va - Math.sign(va) * Math.PI : va;
-  const steps = shuffle ? Math.max(2.6 + spd * 0.7, spd / 0.5) : Math.max(1.7 + spd * 0.36, spd / 1.35);
+  // 步頻（每秒幾步）跟真人差不多：走路約 2 步、慢跑 2.6 步、衝刺 3.8 步
+  const steps = shuffle ? Math.max(2.6 + spd * 0.7, spd / 0.5) : 1.8 + Math.min(spd, 7) * 0.35;
+  // 一隻腳踩地的時間比例：走路 60%（兩腳會同時著地），跑越快越短（跑步時有兩腳都離地的騰空期），腳不用劈很開
+  const duty = shuffle ? 0.5 : spd < 1.2 ? 0.6 : spd < 2.2 ? 0.6 - (spd - 1.2) * 0.24 : spd < 3.5 ? 0.36 - (spd - 2.2) / 1.3 * 0.06 : Math.max(0.26, 0.3 - (spd - 3.5) / 3.5 * 0.04);
   if (!air) p.runPhase += Math.PI * steps * dt * Math.min(1, spd / 0.4);
-  const stepLen = spd / steps, LEG = 0.98 * p.scale;
+  const stepLen = spd * duty * 2 / steps, LEG = 0.98 * p.scale; // 踩地期間腳相對身體移動的距離
   const amp = Math.asin(Math.min(0.82, stepLen / (2 * LEG)));
   // 步態：一半時間踩地（腳相對身體「等速」往後移＝相對地面靜止）、一半時間抬腳往前擺
-  const gait = phi => { phi = ((phi % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-    if (phi < Math.PI) return { u: 1 - 2 * phi / Math.PI, lift: 0 };
-    const t = (phi - Math.PI) / Math.PI, e = t * t * (3 - 2 * t); return { u: -1 + 2 * e, lift: Math.sin(t * Math.PI) }; };
+  const gait = phi => { phi = ((phi % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); const st = 2 * Math.PI * duty;
+    if (phi < st) return { u: 1 - 2 * phi / st, lift: 0 };
+    const t = (phi - st) / (2 * Math.PI - st), e = t * t * (3 - 2 * t); return { u: -1 + 2 * e, lift: Math.sin(t * Math.PI) }; };
   const footAng = u => Math.asin(Math.max(-0.95, Math.min(0.95, u * stepLen / (2 * LEG))));
   const ph = p.runPhase;
   const sw = Math.min(1, spd / 6.5);
+  const armS = Math.min(1, spd / 4.5);
   const k = Math.min(1, dt * 16);
   // 側移（防守滑步）：速度方向和面向差很多時，改成橫向滑步
   const gL = gait(ph), gR = gait(ph + Math.PI), lk = Math.min(1, stepLen * 1.4) * Math.min(1, spd / 0.6);
@@ -350,12 +354,13 @@ export function animatePlayer(p, dt) {
   const P = { hipL: shuffle ? 0 : -footAng(gL.u) * dirS - gL.lift * 0.25 * lk, hipR: shuffle ? 0 : -footAng(gR.u) * dirS - gR.lift * 0.25 * lk,
     kneeL: 0.16 + gL.lift * 1.15 * lk, kneeR: 0.16 + gR.lift * 1.15 * lk,
     hipLz: 0, hipRz: 0,
-    shLx: Math.sin(ph) * sw * 0.8, shRx: -Math.sin(ph) * sw * 0.8, shLz: 0.1, shRz: -0.1, elL: -0.3 - sw * 0.9, elR: -0.3 - sw * 0.9,
+    shLx: Math.sin(ph) * armS * 0.75, shRx: -Math.sin(ph) * armS * 0.75, shLz: 0.1, shRz: -0.1, elL: -0.3 - Math.min(1, spd / 3) * 1.05, elR: -0.3 - Math.min(1, spd / 3) * 1.05, // 跑起來手肘彎約 80 度、前後擺
     lean: sw * 0.16 + Math.max(-1, Math.min(1, p.accLean || 0)) * 0.3, head: 0, bodyY: null, twist: 0, wrL: 0.15, wrR: 0.15, ankL: null, ankR: null, look: true };
   if (shuffle) { // 防守滑步：腳往側邊踩，同樣踩地時相對地面不動
     const s = Math.sign(lat);
     P.hipLz = 0.07 - footAng(gL.u) * s; P.hipRz = -0.07 - footAng(gR.u) * s;
     P.kneeL = 0.55 + gL.lift * 0.6; P.kneeR = 0.55 + gR.lift * 0.6; }
+  const kDef = [P.kneeL, P.kneeR], kBase = shuffle ? 0.55 : 0.16 + 0.55 * sw; // 移動時本來的蹲低程度（不含抬腳）
   const mode = p.pose;
   // 腳步不經過平滑：同一種移動姿勢維持 0.15 秒後，腿的角度直接用步態算出來的值（平滑會讓腳落後、看起來在滑）
   if (p._lastMode !== mode) { p._lastMode = mode; p._modeT = 0; } else p._modeT = (p._modeT || 0) + dt;
@@ -502,11 +507,17 @@ export function animatePlayer(p, dt) {
   if (LOCO.has(mode) && !air && p.landT <= 0) {
     const L1 = 0.47, L2 = 0.43, half = stepLen / 2 / p.scale, sc = p.scale;
     // 膝蓋照常平滑過渡，髖關節用平滑後的膝蓋角度反算（所以換姿勢時腳也不會滑）
+    const kPose = P.kneeL === kDef[0] && P.kneeR === kDef[1] ? kBase : Math.max(0.05, Math.min(P.kneeL, P.kneeR)); // 這個姿勢本來要蹲多低（不受步伐影響）
     P.kneeL = lerp(r.legL.knee.rotation.x, P.kneeL, k); P.kneeR = lerp(r.legR.knee.rotation.x, P.kneeR, k);
     const AB = kn => [L1 + L2 * Math.cos(kn), L2 * Math.sin(kn)];
     const solve = (d, kn, zr = 0) => { const [A, B] = AB(kn), Ac = A * Math.cos(zr), R = Math.hypot(Ac, B); return Math.asin(Math.max(-0.98, Math.min(0.98, -d / R))) - Math.atan2(B, Ac); };
     const fwdOf = (th, kn, zr) => { const [A, B] = AB(kn); return -(A * Math.cos(zr) * Math.sin(th) + B * Math.cos(th)); };
-    const moving = spd > 0.3;
+    // 身體高度先決定（平順），兩隻腳再用反向運動學去配合它：踩地的腳剛好踩在原地，不會因為步伐讓整個人一上一下跳
+    const Dk = kq => Math.sqrt(L1 * L1 + L2 * L2 + 2 * L1 * L2 * Math.cos(kq));
+    const dropT = P.bodyY !== null ? Math.max(0, -P.bodyY) : 0.9 - Dk(kPose); // 姿勢有指定身體高度（例如防守蹲低）就用它
+    p._dropS = p._dropS == null ? dropT : p._dropS + (dropT - p._dropS) * Math.min(1, dt * 10);
+    const legOut = [];
+    const moving = p._mv = spd > (p._mv ? 0.2 : 0.45); // 有遲滯，速度在門檻附近時不會一下走一下停
     const yawW = p.facing + (p._legYaw || 0), cy = Math.cos(yawW), sy = Math.sin(yawW);
     const s2 = Math.sign(lat) || 1;
     const legs = [[gL, 'L', 1], [gR, 'R', -1]];
@@ -515,7 +526,7 @@ export function animatePlayer(p, dt) {
       let kn = nm === 'L' ? P.kneeL : P.kneeR; const A = AB(kn)[0];
       const baseZ = nm === 'L' ? P.hipLz : P.hipRz;
       let idX, idZ;
-      if (moving && !shuffle) { idX = A * Math.sin(baseZ); idZ = g.u * half * dirS; }
+      if (moving && !shuffle) { idX = A * Math.sin(baseZ); idZ = (g.u - 0.2) * half * dirS; } // 落腳點稍微在身體前面一點、蹬地時在後面多一點（像真人）
       else if (moving && shuffle) { idX = side * 0.13 - g.u * half * s2; idZ = 0; } // 腳站寬一點，滑步時兩腳不交叉
       else { idX = A * Math.sin(baseZ); idZ = fwdOf(nm === 'L' ? P.hipL : P.hipR, kn, baseZ); }
       const hx = side * 0.105, hipWX = p.pos.x + (cy * hx) * sc, hipWZ = p.pos.z + (-sy * hx) * sc;
@@ -526,7 +537,9 @@ export function animatePlayer(p, dt) {
         F.step.t += dt / 0.2; const u = Math.min(1, F.step.t), e = u * u * (3 - 2 * u);
         const [fx2, fz2] = toL(F.step.fx, F.step.fz); lx = fx2 + (idX - fx2) * e; lz = fz2 + (idZ - fz2) * e; lift = Math.sin(u * Math.PI);
         if (u >= 1) { F.step = null; F.on = true; [F.x, F.z] = toW(idX, idZ); F.yaw = yawW; }
+      } else if (F.toeOff && moving && g.lift === 0) { // 已經蹬離地面（腳尖離地），等步態進入擺腳
       } else if (!moving || g.lift === 0) {
+        F.toeOff = false;
         if (!F.on) { // 落腳：就踩在腳現在的位置（不跳）
           F.on = true; if (F.cx !== null && moving) { F.x = F.cx; F.z = F.cz; } else [F.x, F.z] = toW(idX, idZ); F.yaw = yawW;
         }
@@ -534,18 +547,52 @@ export function animatePlayer(p, dt) {
         const reach = Math.abs(lz - idZ) > 0.3 || Math.abs(lx - idX) > 0.3; // 跟步態要求的位置差太多（被撞、急轉）才重新落腳
         if (reach || (!moving && Math.hypot(lx - idX, lz - idZ) > 0.2 && !ft[1 - i].step)) { F.on = false; F.step = { t: 0, fx: F.x, fz: F.z }; }
         p._ankYaw[i] = Math.max(-0.7, Math.min(0.7, F.yaw - yawW)); // 腳掌方向也鎖住（轉身時以腳為軸）
-      } else F.on = false;
-      if (lift) kn += lift * 0.7;
+      } else { F.on = false; F.toeOff = false; }
+      if (moving && !F.on && !F.step) lift = Math.max(lift, g.lift);
+      if (lift > 0 || !F.on) { // 抬起來的腳只擺到「身體現在的高度搆得到」的地方，落地時才不會把身體突然往下拉
+        const vP = 0.9 - (p._dropIK != null ? p._dropIK : p._dropS) - lift * 0.1, rH = Math.sqrt(Math.max(0.01, 0.894 * 0.894 - vP * vP)), hz = Math.hypot(lx, lz);
+        if (hz > rH) { lx *= rH / hz; lz *= rH / hz; }
+      }
+      legOut.push([nm, lx, lz, lift]);
+      [F.cx, F.cz] = toW(lx, lz);
+    }
+    // 身體至少要低到兩隻踩地的腳都搆得到（腳伸直的極限）
+    const LM = (L1 + L2) * 0.995;
+    // 後腳蹬地時可以墊腳尖（腳跟抬起最多 0.14），所以後腳不會把身體往下拉
+    const HMAX = 0.085, rise = a => 0.075 * (Math.cos(a) - 1) + 0.15 * Math.sin(a); // 以腳尖底部為軸轉 a，腳踝升高多少
+    let drop = p._dropS, anyOn = false;
+    for (const [, lx, lz, lift] of legOut) if (!lift && !(lz * dirS < 0 && moving)) { anyOn = true; drop = Math.max(drop, 0.9 - Math.sqrt(Math.max(0.01, LM * LM - lx * lx - lz * lz))); }
+    for (const [, , lz, lift] of legOut) if (!lift && lz * dirS < 0 && moving) anyOn = true; // 後腳只靠墊腳尖配合，搆不到就提早蹬離地面，不把身體往下拉
+    // 跑步騰空（兩腳都離地）時身體高度從離地那一刻平順接到下一次落地，不會突然掉下去
+    if (!anyOn && p._dropH != null) drop = p._dropH + (p._dropS - p._dropH) * Math.min(1, dt * 3);
+    // 跑步的自然起伏：每一步踩地中間身體最低、騰空時最高（平滑的波，幅度幾公分）
+    // 走路：腳跟著地（兩腳同時踩地）時最低、單腳撐地時最高，起伏約 2 公分
+    if (moving && !shuffle) { const wk = Math.max(0, Math.min(1, (2.4 - spd) / 0.6)); drop += (1 - wk) * Math.min(0.055, Math.max(0, spd - 2) * 0.03 + 0.01) * (0.5 + 0.5 * Math.cos(2 * (ph - Math.PI * duty))) + wk * 0.022 * Math.min(1, spd) * (0.5 + 0.5 * Math.cos(2 * ph)); }
+    if (p._dropIK != null) drop = Math.max(drop, p._dropIK - 0.5 * dt); // 身體往上回升有速度上限（往下蹲多一點腳一定搆得到，不會浮空）
+    p._dropH = drop;
+    p._dropIK = drop;
+    const v = 0.9 - drop;
+    p._heel = [0, 0];
+    for (const [nm, lx, lz0, lift] of legOut) {
+      let lz = lz0, h = lift * (shuffle ? 0.08 : 0.1 + 0.22 * Math.max(0, Math.min(1, (spd - 1.5) / 4))); // 抬腳高度：走路低、跑步時腳跟往後上踢
+      if (!lift && moving && lz * dirS < 0) { // 墊腳：腳尖固定在地上，腳跟抬起，腳踝往上、稍微往前
+        const hA = v - Math.sqrt(Math.max(0.01, LM * LM - lx * lx - lz * lz));
+        if (hA > rise(0.95)) { const F = ft[nm === 'L' ? 0 : 1]; if (F.on) { F.on = false; F.toeOff = true; } }
+        if (hA > 0) { let lo = 0, hi = 0.95; for (let it = 0; it < 12; it++) { const m = (lo + hi) / 2; if (rise(m) < hA) lo = m; else hi = m; }
+          const a = lo; h = rise(a); lz += 0.15 * (1 - Math.cos(a)) + 0.075 * Math.sin(a); p._heel[nm === 'L' ? 0 : 1] = a; }
+      }
+      const D = Math.min(LM, Math.hypot(Math.max(0.2, v - h), lx, lz));
+      const kn = Math.acos(Math.max(-1, Math.min(Math.cos(0.03), (D * D - L1 * L1 - L2 * L2) / (2 * L1 * L2))));
       const zr = Math.asin(Math.max(-0.9, Math.min(0.9, lx / AB(kn)[0])));
       const th = solve(lz, kn, zr);
       if (nm === 'L') { P.hipLz = zr; P.hipL = th; P.kneeL = kn; } else { P.hipRz = zr; P.hipR = th; P.kneeR = kn; }
-      [F.cx, F.cz] = toW(lx, lz);
     }
-  } else { for (const F of ft) { F.on = false; F.step = null; F.cx = null; } }
+  } else { for (const F of ft) { F.on = false; F.step = null; F.cx = null; } p._dropIK = null; p._dropS = null; p._dropH = null; p._heel = null; }
   const flat = leg => leg === 'legL' ? -(P.hipL + P.kneeL) : -(P.hipR + P.kneeR);
   const airToe = air ? 0.55 : 0;
   const pushL = !air && spd > 1 ? gL.lift * 0.5 * sw : 0, pushR = !air && spd > 1 ? gR.lift * 0.5 * sw : 0; // 只在抬腳時腳尖下壓，踩地時腳掌貼平
-  const ankL = P.ankL !== null ? P.ankL : flat('legL') + airToe + pushL, ankR = P.ankR !== null ? P.ankR : flat('legR') + airToe + pushR;
+  const hl = p._heel && !air ? p._heel : [0, 0];
+  const ankL = P.ankL !== null ? P.ankL : flat('legL') + airToe + pushL + hl[0], ankR = P.ankR !== null ? P.ankR : flat('legR') + airToe + pushR + hl[1];
   r.legL.hip.rotation.x = lerp(r.legL.hip.rotation.x, P.hipL, kLeg);
   r.legR.hip.rotation.x = lerp(r.legR.hip.rotation.x, P.hipR, kLeg);
   r.legL.hip.rotation.z = lerp(r.legL.hip.rotation.z, P.hipLz, kLeg);
@@ -558,6 +605,10 @@ export function animatePlayer(p, dt) {
   r.armR.sh.rotation.z = lerp(r.armR.sh.rotation.z, P.shRz, k);
   r.armL.el.rotation.x = lerp(r.armL.el.rotation.x, P.elL, k);
   r.armR.el.rotation.x = lerp(r.armR.el.rotation.x, P.elR, k);
+  // 真人動作留下的側轉、扭轉：程式動作沒在控制的軸慢慢歸零
+  { const kk = Math.min(1, k * 0.8); for (const L of [r.legL, r.legR]) { L.hip.rotation.y *= 1 - kk; L.knee.rotation.y *= 1 - kk; L.knee.rotation.z *= 1 - kk; L.ankle.rotation.y *= 1 - kk; }
+    for (const A of [r.armL, r.armR]) { A.sh.rotation.y *= 1 - kk; A.el.rotation.y *= 1 - kk; A.el.rotation.z *= 1 - kk; A.wr.rotation.y *= 1 - kk; A.wr.rotation.z *= 1 - kk; }
+    r.torso.rotation.z *= 1 - kk; r.chest.rotation.z *= 1 - kk; r.neck.rotation.z *= 1 - kk; r.headG.rotation.z *= 1 - kk; }
   // 腳踝：用四元數把大腿＋小腿的轉動整個抵銷，腳掌前後左右都貼平地面，再加上腳尖下壓的角度
   for (const [L, extra, fixed] of [[r.legL, ankL - flat('legL'), P.ankL], [r.legR, ankR - flat('legR'), P.ankR]]) {
     if (fixed !== null) { L.ankle.rotation.set(lerp(L.ankle.rotation.x, fixed, kLeg), 0, 0); continue; }
@@ -585,19 +636,24 @@ export function animatePlayer(p, dt) {
   r.headG.rotation.y = lerp(r.headG.rotation.y, yaw * 0.55, kh);
   r.neck.rotation.x = lerp(r.neck.rotation.x, (-P.lean * 0.6 + P.head) * 0.4 + pitch * 0.4, k);
   r.headG.rotation.x = lerp(r.headG.rotation.x, (-P.lean * 0.6 + P.head) * 0.6 + pitch * 0.6, k);
-  if (P.bodyY !== null) r.body.position.y = lerp(r.body.position.y, P.bodyY, k);
+  if (P.bodyY !== null && !(p._dropIK != null && !air)) r.body.position.y = lerp(r.body.position.y, P.bodyY, k);
   else {
     const kneeAvg = (r.legL.knee.rotation.x + r.legR.knee.rotation.x) / 2;
     const hipAvg = (r.legL.hip.rotation.x + r.legR.hip.rotation.x) / 2;
     // 身體高度：讓比較低的那隻腳剛好踩在地上（不浮空、不陷進地板）
     const ext = L => { const th = L.hip.rotation.x, kn = L.knee.rotation.x; return (0.47 + 0.43 * Math.cos(kn)) * Math.cos(L.hip.rotation.z) * Math.cos(th) - 0.43 * Math.sin(kn) * Math.sin(th); };
-    const drop = 0.9 - Math.max(ext(r.legL), ext(r.legR));
+    // 身體高度只看「踩在地上」的腳；兩腳都離地（跑步騰空）時維持原本高度並平順過渡，不會一上一下跳
+    const ftp = p._ft, onL = ftp && ftp[0].on, onR = ftp && ftp[1].on;
+    let drop;
+    if (p._dropIK != null && !air) drop = p._dropIK;
+    else if (onL || onR) drop = 0.9 - Math.max(onL ? ext(r.legL) : -9, onR ? ext(r.legR) : -9);
+    else if (ftp && p._dropLast != null && !air) drop = p._dropLast;
+    else drop = 0.9 - Math.max(ext(r.legL), ext(r.legR));
+    if (p._dropIK != null && !air) p._dropLast = drop;
+    else if (!air) { p._dropLast = p._dropLast == null ? drop : p._dropLast + (drop - p._dropLast) * (onL || onR ? 0.6 : 0.2); drop = p._dropLast; }
+    else p._dropLast = null;
     r.body.position.y = p.jy / p.scale + (air ? 0 : -drop);
   }
-  // 真人動作留下的側轉、扭轉：程式動作沒在控制的軸慢慢歸零
-  { const kk = Math.min(1, k * 0.8); for (const L of [r.legL, r.legR]) { L.hip.rotation.y *= 1 - kk; L.knee.rotation.y *= 1 - kk; L.knee.rotation.z *= 1 - kk; L.ankle.rotation.y *= 1 - kk; }
-    for (const A of [r.armL, r.armR]) { A.sh.rotation.y *= 1 - kk; A.el.rotation.y *= 1 - kk; A.el.rotation.z *= 1 - kk; A.wr.rotation.y *= 1 - kk; A.wr.rotation.z *= 1 - kk; }
-    r.torso.rotation.z *= 1 - kk; r.chest.rotation.z *= 1 - kk; r.neck.rotation.z *= 1 - kk; r.headG.rotation.z *= 1 - kk; }
   // 骨盆：沒播真人動作時慢慢回正
   { _qa.setFromAxisAngle(_yAx, legYawT); r.hips.quaternion.slerp(_qa, kLeg); } // 骨盆朝移動方向（真人動作的腳在空中時才會再覆蓋）
   // 真人動作覆蓋在程式動作上（p.mo = { name, f, mirror, legs }，p.moW = 混合比例）

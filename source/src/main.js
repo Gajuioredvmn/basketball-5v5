@@ -1925,7 +1925,11 @@ function updatePlayers(dt) {
     } else {
       tgt = tgt || aiTarget(p, ch);
       const dx = tgt.x - p.pos.x, dz = tgt.z - p.pos.z, d = hyp(dx, dz);
-      if (d > 0.12) want.set(dx / d, 0, dz / d); spdMul = Math.min(tgt.spd, d * 0.9 + 0.05); sprint = !!tgt.sprint;
+      // 到位後站穩，目標離開 0.55 公尺以上才再起步（避免在目標附近一走一停）；接近目標時像真人一樣提前減速
+      const tight = (ball.state === 'pass' && ball.pass && ball.pass.to === p) || ball.state === 'loose' || ball.state === 'shot' || S.phase !== 'live' || ball.holder === p; // 接球、搶球、發球等要精準到位
+      if (p._arr && d > (tight ? 0.2 : 0.55)) p._arr = false; else if (!p._arr && d < (tight ? 0.1 : 0.15)) p._arr = true;
+      if (!p._arr) { want.set(dx / d, 0, dz / d); spdMul = Math.min(tgt.spd, Math.sqrt(2 * 7 * d) / base); } else spdMul = 0;
+      sprint = !!tgt.sprint;
       if (tgt.face) faceT = tgt.face;
     }
     p.sprint = sprint && want && want.lengthSq() > 0;
@@ -1940,7 +1944,7 @@ function updatePlayers(dt) {
       if (p.action === 'steal') max *= 0.5;
       want.multiplyScalar(max);
       const braking = want.lengthSq() < 0.01 || want.dot(p.vel) < 0;
-      const acc = (braking ? 30 : 24) * dt; tmp.copy(want).sub(p.vel); if (tmp.length() > acc) tmp.setLength(acc); p.vel.add(tmp);
+      const acc = (user ? (braking ? 24 : 17) : (braking ? 15 : 10)) * dt; /* 加速度接近真人（電腦球員不會一瞬間暴衝或急停） */ tmp.copy(want).sub(p.vel); if (tmp.length() > acc) tmp.setLength(acc); p.vel.add(tmp);
       if (ball.holder === p && S.phase === 'inbound') p.vel.multiplyScalar(0.5);
     }
     if (S.phase === 'live' && p.jy === 0) {
@@ -2808,5 +2812,5 @@ for (let t = 0; t < 2; t++) roster[t].forEach(p => { if (!p.onCourt) p.pos.copy(
 startTipoff(); S.phase = 'title'; ball.state = 'dead'; ball.pos.set(0, BALL_R, 1);
 camLook.set(0, 0.6, 0);
 if (AUTO) { S.qlen = +(params.get('q') || 60); S.diff = 1; newGame(); }
-window.__g = { THREE, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
+window.__g = { THREE, scene, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
 requestAnimationFrame(frame);
