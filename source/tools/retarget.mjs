@@ -46,9 +46,19 @@ export function retarget(path, { from = 0, to = null, mirror = false } = {}) {
       const hd = limb(fa.world, DOWN, dir(S + 'Hand', S + 'HandIndex1')); res['wr' + s] = hd.local;
     }
     out.push({ q: BONES.map(b => res[b]), hipY: P('Hips').y, yaw, x: P('Hips').x, z: P('Hips').z,
-      lhand: P('LeftHand').y, rhand: P('RightHand').y, ball: f.ball ? f.ball.clone() : null, contact: f.contact, ballL: f.ball ? V().subVectors(f.ball, P('Hips')).applyQuaternion(qYawInv) : null, lfoot: Math.min(P('LeftFoot').y, P('LeftToeBase').y), rfoot: Math.min(P('RightFoot').y, P('RightToeBase').y) });
+      lhand: P('LeftHand').y, rhand: P('RightHand').y, ball: f.ball ? f.ball.clone() : null, contact: f.contact, ballL: f.ball ? V().subVectors(f.ball, P('Hips')).applyQuaternion(qYawInv) : null, lfz: L('LeftFoot').z, rfz: L('RightFoot').z, lfoot: Math.min(P('LeftFoot').y, P('LeftToeBase').y), rfoot: Math.min(P('RightFoot').y, P('RightToeBase').y) });
   }
   return { frames: out, fps };
+}
+// 片段「隱含的地面速度」：站在地上的那隻腳相對骨盆往後移動的速度（腳不滑的條件：播放速度＝實際移動速度÷這個值）
+export function stanceSpeed(fr, fps = 30) {
+  const vs = []; let mn = 1e9; for (const f of fr) mn = Math.min(mn, f.lfoot, f.rfoot);
+  for (let i = 0; i < fr.length - 1; i++) {
+    const a = fr[i], b = fr[i + 1];
+    for (const [ya, za, zb, yb] of [[a.lfoot, a.lfz, b.lfz, b.lfoot], [a.rfoot, a.rfz, b.rfz, b.rfoot]])
+      if (ya < mn + 0.025 && yb < mn + 0.025) vs.push(-(zb - za) * fps); // 兩幀都踩在地上的那隻腳
+  }
+  vs.sort((x, y) => x - y); return vs.length ? vs[Math.floor(vs.length / 2)] : 0;
 }
 // 打包：每幀 17 根骨頭 × 4（int16）＋骨盆高度（mm）；有球的片段再加球的位置（角色座標，mm）與手是否碰球
 export function pack(fr, withBall = false) {

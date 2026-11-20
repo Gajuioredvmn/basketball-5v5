@@ -444,6 +444,8 @@ function shotWindow(p, d, cd, three, moving) {
 function mocapFor(p, dt) {
   let want = null;
   const spd = hyp(p.vel.x, p.vel.z), jv0 = p.jv0 || 1;
+  // 移動方向跟面向差太多（側移、後退）時不用真人走路／運球片段，免得腳往前踩、身體往旁邊移
+  const straight = spd < 0.3 || (p.vel.x * Math.sin(p.facing) + p.vel.z * Math.cos(p.facing)) / spd > 0.88;
   // 空中三段：上升（起跳→最高點）、下降（最高點→落地）
   const airF = (a, top, land) => p.jv > 0 ? a + clamp(1 - p.jv / jv0, 0, 1) * (top - a) : top + clamp(-p.jv / jv0, 0, 1) * (land - top);
   if (p.action === 'shoot' && p.shotKind === 'jump') {
@@ -464,12 +466,19 @@ function mocapFor(p, dt) {
     if (f != null) want = { name: 'rebound', f };
   } else if (p.pose === 'catch' && ball.pass && ball.pass.to === p) {
     const ev = clipInfo('catch').ev; want = { name: 'catch', f: ev.grab - clamp((ball.pass.T - ball.pass.t) * 30, 0, ev.grab) };
-  } else if (ball.holder === p && p.pose === 'dribble' && !(p.moveT > 0)) {
-    // 走著運球用 CMU；跑起來換 BallPlay 的跑動運球（有真實球路）
-    const fast = p.mo && p.mo.name === 'drun' ? spd > 1.9 : spd > 2.5;
-    if (fast) { const c = clipInfo('drun'); p.moDrun = (p.moDrun || 0) + dt * 30 * clamp(spd / c.speed, 0.6, 1.8); want = { name: 'drun', f: p.moDrun, mirror: (p.hand || 1) < 0 }; }
-    else { p.moDrib = (p.moDrib || 0) + dt * 30 * clamp(spd / 1.5, 0.45, 1.9); want = { name: 'dribble', f: p.moDrib, mirror: (p.hand || 1) < 0, legs: clamp((spd - 0.3) / 0.9, 0, 1) }; }
+  } else if (ball.holder === p && p.pose === 'dribble' && !(p.moveT > 0) && straight) {
+    // 不滑步的原則：腳用真人動作時，播放速度＝實際移動速度÷片段的步行速度（腳踩地時相對地面不動）
+    const cw = clipInfo('dribble'), cr = clipInfo('drun');
+    // 腳一律用程式步態（踩地時腳掌完全不動），真人動作只用在上半身（運球的手、身體）
+    const fast = p.mo && p.mo.name === 'drun' ? spd > cr.speed * 0.72 : spd > cw.speed * 1.75;
+    if (fast) { p.moDrun = (p.moDrun || 0) + dt * 30 * Math.max(0.8, spd / cr.speed); want = { name: 'drun', f: p.moDrun, mirror: (p.hand || 1) < 0, legs: 0 }; }
+    else { p.moDrib = (p.moDrib || 0) + dt * 30 * Math.max(0.85, spd / cw.speed); want = { name: 'dribble', f: p.moDrib, mirror: (p.hand || 1) < 0, legs: 0 }; }
+  } else if (ball.holder !== p && p.pose === 'run' && !p.action && p.jy === 0 && spd > 0.45 && spd < 1.9 && straight) {
+    // 慢走（例如死球時走回位置）用 Quaternius 走路，同樣照速度播放
+    const c = clipInfo('walk'); p.moWalk = (p.moWalk || 0) + dt * 30 * (spd / c.speed); want = { name: 'walk', f: p.moWalk, legs: 0 };
   }
+  // 跳投、上籃、搶籃板、接球：只有在空中才用真人動作的腳；踩在地上時用程式算的腳（不會因為真人有移動而滑步）
+  if (want && want.legs == null) { const inAir = p.jy > 0.001 || p.jv > 0; p.moLegs = (p.moLegs || 0) + ((inAir ? 1 : 0) - (p.moLegs || 0)) * Math.min(1, dt * 20); want.legs = p.moLegs; }
   const target = want ? 1 : 0;
   if (want && p.mo && p.mo.name !== want.name) p.moW = Math.min(p.moW || 0, 0.35); // 換片段時淡入，避免跳動
   p.moW = (p.moW || 0) + (target - (p.moW || 0)) * Math.min(1, dt * (want ? 14 : 9));
