@@ -492,12 +492,14 @@ function mocapFor(p, dt) {
     // 運球招式：真人 Crossover、胯下、背後、轉身、假動作
     const u = 1 - p.moveT / (p.moveDur || 0.42), k = p.moveKind;
     let name, a, b;
-    if (k === 'xover') { name = vClip(p, 'mv', spd > 3 ? ['xoverRun'] : ['xover1', 'xover2', 'xoverRun']); const c = clipInfo(name), sw = c.ev.sw; a = Math.max(0, sw - 12); b = Math.min(c.n - 1, sw + 10); }
+    if (k === 'xover') { name = vClip(p, 'mv', spd > 3 ? ['xoverRun'] : ['xover1', 'xover2', 'xoverRun']); const c = clipInfo(name), sw = c.ev.sw; a = Math.max(0, sw - 12); b = Math.min(c.n - 1, sw + 13); }
     else if (k === 'cross') { name = 'legturn'; const sw = clipInfo(name).ev.sw; a = sw - 12; b = sw + 10; }
     else if (k === 'behind') { name = 'behind'; const sw = clipInfo(name).ev.sw; a = sw - 14; b = sw + 10; }
     else if (k === 'spin') { name = vClip(p, 'mv', 'spin'); const c = clipInfo(name); a = c.n * 0.3; b = c.n * 0.85; }
     else if (k === 'hesi') { name = (p.spinDir || 1) > 0 ? 'feintR' : 'feintL'; const c = clipInfo(name); a = c.n * 0.2; b = c.n * 0.8; }
-    if (name) want = { name, f: a + u * (b - a), legs: 0, mirror: mir && k !== 'hesi', spine: 0.5 };
+    // 真人換手片段都是「右手換到左手」：換到左手時照原樣播，換到右手時左右鏡像（球路也一起鏡像，球就會真的在手上）
+    const hasBall = clipInfo(name).ball;
+    if (name) want = { name, f: a + u * (b - a), legs: 0, mirror: hasBall ? (p.hand || 1) > 0 : mir && k !== 'hesi', spine: hasBall ? (k === 'behind' ? 0.35 : 0.85) : 0.5 };
   } else if (ball.holder === p && p.pose === 'dribble') {
     // 不滑步的原則：腳一律用程式步態（踩地時腳掌完全不動），真人動作只用在上半身（運球的手、身體）
     const [, cd] = nearestOpp(p);
@@ -2725,17 +2727,17 @@ function render(dt) {
   if (ball.state === 'held' && hb && !replay) {
     hb.rig.root.updateMatrixWorld(true);
     const pose = hb.pose;
-    if (pose === 'dribble' && hb.mo && hb.mo.name === 'drun' && hb.moW > 0.6) {
-      // 真實球路：片段裡錄下的球位置（角色座標）轉到場上
-      const lb = new THREE.Vector3(); clipBall('drun', hb.mo.f, hb.mo.mirror, lb);
+    if ((pose === 'dribble' || ((pose === 'xover' || pose === 'cross' || pose === 'behind') && hb.moveT > 0)) && hb.mo && clipInfo(hb.mo.name) && clipInfo(hb.mo.name).ball && hb.moW > 0.6) {
+      // 真實球路：片段裡錄下的球位置（角色座標）轉到場上（跑動運球、換手、胯下、背後）
+      const lb = new THREE.Vector3(); clipBall(hb.mo.name, hb.mo.f, hb.mo.mirror, lb);
       lb.multiplyScalar(hb.scale); lb.applyAxisAngle(new THREE.Vector3(0, 1, 0), hb.facing);
       vis = lb.add(hb.pos); vis.y = Math.max(BALL_R, vis.y);
       // 跟手掌的位置混合，避免骨架比例不同造成球離手
       const hw = handWorld(hb.rig, (hb.hand || 1) > 0); const dh = vis.distanceTo(hw);
       if (vis.y > 0.75 && dh < 0.45) vis.lerp(hw.addScaledVector(new THREE.Vector3(0, -1, 0), BALL_R + 0.02), 0.6);
-    } else if ((pose === 'dribble' || pose === 'hesi') && hb.mo && hb.mo.name === 'dribble' && hb.moW > 0.5) {
+    } else if ((pose === 'dribble' || pose === 'hesi') && hb.mo && clipInfo(hb.mo.name) && clipInfo(hb.mo.name).lows && hb.moW > 0.5) {
       // 真人運球：手最低點把球推出 → 落地 → 彈回手上，跟著手的節奏
-      const ci = clipInfo('dribble'), top = handWorld(hb.rig, (hb.hand || 1) > 0); top.y -= BALL_R + 0.03;
+      const ci = clipInfo(hb.mo.name), top = handWorld(hb.rig, (hb.hand || 1) > 0); top.y -= BALL_R + 0.03;
       const ph = ((((hb.mo.f - ci.lows[0]) % ci.n) + ci.n) % ci.n) / ci.n;
       let y;
       if (ph < 0.42) y = top.y - (top.y - BALL_R) * Math.pow(ph / 0.42, 1.5);
@@ -2759,6 +2761,11 @@ function render(dt) {
       vis = two ? handWorld(hb.rig, true).add(handWorld(hb.rig, false)).multiplyScalar(0.5).addScaledVector(fwd(hb), 0.06) : handWorld(hb.rig, true).addScaledVector(fwd(hb), 0.05);
       vis.y += 0.08;
     }
+    // 換動作（例如換手運球做完、接回一般運球）時，球的位置用 0.15 秒平順接過去，不會瞬間跳開
+    const src = pose + '|' + (hb.mo && hb.moW > 0.5 ? hb.mo.name : '');
+    if (hb._vSrc !== src && hb.visBall && hb.visT === renderTick - 1) { hb._vBl = 0.15; hb._vFrom = hb.visBall.clone(); }
+    hb._vSrc = src;
+    if (hb._vBl > 0) { hb._vBl -= dt; vis = hb._vFrom.clone().lerp(vis, 1 - Math.max(0, hb._vBl) / 0.15); }
     hb.visBall = vis.clone(); hb.visT = renderTick;
   }
   ballMesh.position.copy(vis); ballMesh.visible = vis.y > -1;

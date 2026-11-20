@@ -116,7 +116,8 @@ const GROUPS = { rebStand: [], rebound: ['rebound'], catch: ['catch'], pick: [],
 // 10. CMU 動作庫裡其他全部籃球動作（06 運球、102 籃球攻防、124 投籃／罰球／上籃、裁判手勢）
 { const cm = (f, o) => retarget(D + f, o).frames, skipped = [];
   const loopOf = (fr, mn = 20, mx = 60) => { const b = bestLoop(fr, Math.min(mn, fr.length - 6), mx); return b ? fr.slice(b.i, b.j) : fr; };
-  const addLoop = (name, fr, grp) => { const seg = loopOf(fr); put(name, seg, { loop: true, speed: rigSpeed(seg) }); if (grp) (GROUPS[grp] = GROUPS[grp] || []).push(name); };
+  const lowsOf = seg => { const L = []; for (let k = 1; k < seg.length - 1; k++) if (seg[k].rhand < seg[k - 1].rhand && seg[k].rhand <= seg[k + 1].rhand) L.push(k); return L.length ? L : undefined; };
+  const addLoop = (name, fr, grp) => { const seg = loopOf(fr); put(name, seg, { loop: true, speed: rigSpeed(seg), lows: grp && grp.startsWith('drib') ? lowsOf(seg) : undefined }); if (grp) (GROUPS[grp] = GROUPS[grp] || []).push(name); };
   // 06：走著運球（前進、後退、側移、轉彎、換手、低運球）
   for (const [n, f, g] of [['dribF2', '06_03', 'dribble'], ['dribF3', '06_04', 'dribble'], ['dribF4', '06_05', 'dribble'], ['dribBack1', '06_06', 'dribBack'], ['dribBack2', '06_07', 'dribBack'],
     ['dribSide1', '06_08', 'dribSide'], ['dribSide2', '06_09', 'dribSide'], ['dribTurnL', '06_10', 'dribble'], ['dribTurnR', '06_11', 'dribble'], ['dribCross', '06_12', 'dribble'], ['dribLow', '06_13', 'dribLow']])

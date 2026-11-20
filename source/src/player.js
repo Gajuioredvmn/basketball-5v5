@@ -381,8 +381,8 @@ export function animatePlayer(p, dt) {
     P.hipL = H > 0 ? -0.75 : 0.45; P.hipR = H > 0 ? 0.45 : -0.75; P.kneeL = H > 0 ? 0.95 : 0.45; P.kneeR = H > 0 ? 0.45 : 0.95; P.lean = 0.42;
     const give = u < 0.5 ? -H : H;
     if (mode === 'cross' || mode === 'xover') { setArm(give, -0.25, -0.35, -0.25); setArm(-give, -0.55, 0.25, -0.6); if (mode === 'xover') P.lean = 0.3; }
-    else { setArm(give, 0.55, 0.35, -0.35); setArm(-give, 0.4, 0.4, -0.5); P.lean = 0.3; } // 背後：手往身後繞
-    P.bodyY = mode === 'xover' ? -0.07 : -0.14;
+    else { setArm(give, 0.55, 0.35, -0.35); setArm(-give, 0.4, 0.4, -0.5); P.lean = 0.15; } // 背後：手往身後繞
+    P.bodyY = mode === 'xover' ? -0.1 : -0.14;
   } else if (mode === 'hesi') {
     setArm(H, -0.5, 0.3, -0.9); setArm(-H, -0.6, 0.5, -1.0); P.lean = 0.0; P.kneeL += 0.15; P.kneeR += 0.15; P.head = -0.15;
   } else if (mode === 'post') {
