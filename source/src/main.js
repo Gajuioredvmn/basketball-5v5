@@ -255,16 +255,45 @@ addEventListener('pointermove', e => {
 });
 const joyEnd = e => { if (e.pointerId !== joy.id) return; joy.id = null; joy.dx = joy.dy = 0; const jb = $('joy'); jb.classList.remove('on'); jb.style.left = ''; jb.style.top = ''; $('knob').style.transform = ''; };
 addEventListener('pointerup', joyEnd); addEventListener('pointercancel', joyEnd);
-function bindBtn(id, down, up) {
-  const el = $(id); let pid = null;
-  el.addEventListener('pointerdown', e => { e.preventDefault(); if (S.phase === 'replay' || S.phase === 'intro') { skipCinematic(); return; } pid = e.pointerId; el.setPointerCapture?.(e.pointerId); el.classList.add('pressed'); down(); });
-  const end = e => { if (e.pointerId !== pid) return; pid = null; el.classList.remove('pressed'); up && up(); };
-  el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end); el.addEventListener('lostpointercapture', end);
+// 按鍵可以「滑」：手指不用放開，從一個鍵滑到另一個鍵就等於按下那個鍵。
+// 從「加速」滑出去時，加速會一直維持到這根手指放開（所以按著加速滑到投籃＝衝刺中出手、可以灌籃）
+const BTN = {
+  b1: { down: () => { inp.b1 = true; inp.b1Down = true; }, up: () => { if (inp.b1) { inp.b1 = false; inp.b1Up = true; } } },
+  b2: { down: () => { inp.b2Down = true; } },
+  b3: { down: () => { inp.b3 = true; } },
+  b4: { down: () => { inp.b4Down = true; } },
+};
+const fingers = new Map();
+const pressBtn = id => { $(id).classList.add('pressed'); BTN[id].down(); };
+const releaseBtn = id => { $(id).classList.remove('pressed'); BTN[id].up && BTN[id].up(); };
+const syncSprint = () => { inp.b3 = [...fingers.values()].some(f => f.sprint); };
+for (const id of Object.keys(BTN)) {
+  const el = $(id);
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (S.phase === 'replay' || S.phase === 'intro') { skipCinematic(); return; }
+    try { el.releasePointerCapture?.(e.pointerId); } catch (err) { } // 觸控會自動鎖定在第一個鍵上，解除才能滑到別的鍵
+    fingers.set(e.pointerId, { cur: id, sprint: id === 'b3' });
+    pressBtn(id); syncSprint();
+  });
 }
-bindBtn('b1', () => { inp.b1 = true; inp.b1Down = true; }, () => { if (inp.b1) { inp.b1 = false; inp.b1Up = true; } });
-bindBtn('b2', () => inp.b2Down = true);
-bindBtn('b3', () => inp.b3 = true, () => inp.b3 = false);
-bindBtn('b4', () => inp.b4Down = true);
+addEventListener('pointermove', e => {
+  const f = fingers.get(e.pointerId); if (!f) return;
+  const hit = document.elementFromPoint(e.clientX, e.clientY), btn = hit && hit.closest && hit.closest('.btn');
+  const nid = btn && BTN[btn.id] && getComputedStyle(btn).display !== 'none' ? btn.id : null;
+  if (nid === f.cur) return;
+  if (f.cur) { if (f.cur === 'b3') $('b3').classList.remove('pressed'); else releaseBtn(f.cur); }
+  if (nid) { if (nid === 'b3') f.sprint = true; pressBtn(nid); }
+  f.cur = nid; syncSprint();
+});
+const fingerEnd = e => {
+  const f = fingers.get(e.pointerId); if (!f) return;
+  fingers.delete(e.pointerId);
+  if (f.cur) releaseBtn(f.cur);
+  if (f.sprint) $('b3').classList.remove('pressed');
+  syncSprint();
+};
+addEventListener('pointerup', fingerEnd); addEventListener('pointercancel', fingerEnd);
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('touchmove', e => { if (!e.target.closest('.scrollable')) e.preventDefault(); }, { passive: false });
 document.addEventListener('dblclick', e => e.preventDefault());
