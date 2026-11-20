@@ -2,6 +2,44 @@ import * as THREE from 'three';
 import { TEAM_INFO } from './const.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { MOCAP, MOCAP_BONES } from './mocapData.js';
+
+// ---- 真人動作（CMU 動作捕捉）播放 ----
+const CLIPS = {};
+for (const [name, c] of Object.entries(MOCAP)) {
+  const bin = atob(c.data), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  CLIPS[name] = { ...c, a: new Int16Array(u8.buffer), per: MOCAP_BONES.length * 4 + 1 + (c.ball ? 4 : 0), hy: MOCAP_BONES.length * 4 };
+}
+export const clipInfo = name => CLIPS[name];
+// 片段裡球的位置（角色自己的座標：面向 +z、腳底中心為原點）與手有沒有碰到球
+export function clipBall(name, f, mirror, out) {
+  const c = CLIPS[name]; if (!c || !c.ball) return null;
+  const n = c.n; let f0 = Math.floor(f), t = f - f0;
+  if (c.loop) f0 = ((f0 % n) + n) % n; else { f0 = Math.max(0, Math.min(n - 1, f0)); if (f0 === n - 1) t = 0; }
+  const f1 = c.loop ? (f0 + 1) % n : Math.min(n - 1, f0 + 1), o0 = f0 * c.per + c.hy + 1, o1 = f1 * c.per + c.hy + 1, A = c.a;
+  out.set((A[o0] * (1 - t) + A[o1] * t) / 1000, (A[o0 + 1] * (1 - t) + A[o1 + 1] * t) / 1000, (A[o0 + 2] * (1 - t) + A[o1 + 2] * t) / 1000);
+  if (mirror) out.x = -out.x;
+  return A[o0 + 3];
+}
+const MIRROR = MOCAP_BONES.map(b => { const m = b.match(/^(.*)([LR])$/); return m ? MOCAP_BONES.indexOf(m[1] + (m[2] === 'L' ? 'R' : 'L')) : MOCAP_BONES.indexOf(b); });
+const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _qI = new THREE.Quaternion();
+function clipQuat(c, fi, b, out) { const o = fi * c.per + b * 4, A = c.a; return out.set(A[o] / 32767, A[o + 1] / 32767, A[o + 2] / 32767, A[o + 3] / 32767).normalize(); }
+function boneList(r) { return [r.hips, r.torso, r.chest, r.neck, r.headG, r.legL.hip, r.legL.knee, r.legL.ankle, r.legR.hip, r.legR.knee, r.legR.ankle, r.armL.sh, r.armL.el, r.armL.wr, r.armR.sh, r.armR.el, r.armR.wr]; }
+// 把片段第 f 幀（可以是小數，會內插）套到骨架上；w 是混合比例，mask(i) 回傳每根骨頭的比例
+function applyClip(r, c, f, w, mirror, mask) {
+  const n = c.n; let f0 = Math.floor(f), t = f - f0;
+  if (c.loop) { f0 = ((f0 % n) + n) % n; } else { f0 = Math.max(0, Math.min(n - 1, f0)); if (f0 === n - 1) t = 0; }
+  const f1 = c.loop ? (f0 + 1) % n : Math.min(n - 1, f0 + 1);
+  const bl = r._bl || (r._bl = boneList(r));
+  for (let i = 0; i < bl.length; i++) {
+    const src = mirror ? MIRROR[i] : i, wi = w * (mask ? mask(i) : 1); if (wi <= 0.001) continue;
+    clipQuat(c, f0, src, _qa); clipQuat(c, f1, src, _qb); _qa.slerp(_qb, t);
+    if (mirror) { _qa.y = -_qa.y; _qa.z = -_qa.z; }
+    bl[i].quaternion.slerp(_qa, wi);
+  }
+  const hy = (c.a[f0 * c.per + c.hy] * (1 - t) + c.a[f1 * c.per + c.hy] * t) / 1000;
+  return hy - c.stand; // 骨盆比站立時低多少（蹲）
+}
 
 const geoCache = {};
 const geo = (k, f) => geoCache[k] || (geoCache[k] = f());
@@ -275,6 +313,7 @@ export function handWorld(rig, right) {
 const lerp = (a, b, t) => a + (b - a) * t;
 
 export function animatePlayer(p, dt) {
+  if (p.rig._moDy) { p.rig.body.position.y -= p.rig._moDy; p.rig._moDy = 0; }
   const r = p.rig;
   const spd = Math.hypot(p.vel.x, p.vel.z);
   const air = p.jy > 0.02;
@@ -478,6 +517,18 @@ export function animatePlayer(p, dt) {
     const drop = (1 - Math.cos(kneeAvg)) * 0.22 + (1 - Math.cos(hipAvg)) * 0.12 + (shuffle ? 0.04 : 0);
     const bob = air ? 0 : Math.abs(Math.sin(ph)) * 0.045 * sw;
     r.body.position.y = p.jy / p.scale + (air ? 0 : -drop * 0.85 + bob);
+  }
+  // 真人動作留下的側轉、扭轉：程式動作沒在控制的軸慢慢歸零
+  { const kk = Math.min(1, k * 0.8); for (const L of [r.legL, r.legR]) { L.hip.rotation.y *= 1 - kk; L.knee.rotation.y *= 1 - kk; L.knee.rotation.z *= 1 - kk; L.ankle.rotation.y *= 1 - kk; L.ankle.rotation.z *= 1 - kk; }
+    for (const A of [r.armL, r.armR]) { A.sh.rotation.y *= 1 - kk; A.el.rotation.y *= 1 - kk; A.el.rotation.z *= 1 - kk; A.wr.rotation.y *= 1 - kk; A.wr.rotation.z *= 1 - kk; }
+    r.torso.rotation.z *= 1 - kk; r.chest.rotation.z *= 1 - kk; r.neck.rotation.z *= 1 - kk; r.headG.rotation.z *= 1 - kk; }
+  // 骨盆：沒播真人動作時慢慢回正
+  if (!p.mo || !(p.moW > 0)) r.hips.quaternion.slerp(_qI, Math.min(1, k));
+  // 真人動作覆蓋在程式動作上（p.mo = { name, f, mirror, legs }，p.moW = 混合比例）
+  if (p.mo && p.moW > 0.001 && CLIPS[p.mo.name]) {
+    const c = CLIPS[p.mo.name], legs = p.mo.legs == null ? 1 : p.mo.legs;
+    const dy = applyClip(r, c, p.mo.f, p.moW, p.mo.mirror, legs < 1 ? (i => (i >= 5 && i <= 10) || i === 0 ? legs : 1) : null);
+    if (p.mo.crouch !== false) { r._moDy = Math.min(0, dy) * p.moW * (p.jy > 0.02 ? 0 : 1); r.body.position.y += r._moDy; }
   }
   r.root.position.set(p.pos.x, 0, p.pos.z);
   r.root.rotation.y = p.facing;

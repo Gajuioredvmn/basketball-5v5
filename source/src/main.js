@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { HX, HZ, RIM_H, RIM_R, BALL_R, BASKET_X, BOARD_X, BOARD_BOTTOM, BOARD_W, BOARD_H, THREE_R, THREE_SIDE, KEY_HALF, FT_X, CIRCLE_R, RA_R, G, TEAM_INFO, POS_NAMES, PALETTE } from './const.js';
 import { buildArena, updateShotClockDisplays } from './arena.js';
-import { makePlayerMesh, makeReflection, animatePlayer, handWorld, jerseyTexture, shortsTexture } from './player.js';
+import { makePlayerMesh, makeReflection, animatePlayer, handWorld, jerseyTexture, shortsTexture, clipInfo, clipBall } from './player.js';
 import { initAudio, sfx, setMuted } from './audio.js';
 import { createExtras } from './extras.js';
 import { createJumbotron } from './jumbotron.js';
@@ -354,7 +354,7 @@ const chest = p => new THREE.Vector3(p.pos.x, 1.3 * p.scale + p.jy, p.pos.z);
 // ================= 球權 =================
 // 球員重力比球大一點：跳的高度不變，但滯空時間變短，起跳落地比較乾脆、不會飄
 const PG = G * 1.45, PGK = Math.sqrt(1.45);
-function jump(p, v) { if (p.jy > 0.001 || p.jv > 0) return false; p.jv = v * PGK * (0.9 + 0.1 * p.sta) * Math.sqrt(p.jmp || 1); p.jy = 0.001; return true; }
+function jump(p, v) { if (p.jy > 0.001 || p.jv > 0) return false; p.jv = v * PGK * (0.9 + 0.1 * p.sta) * Math.sqrt(p.jmp || 1); p.jv0 = p.jv; p.jy = 0.001; return true; }
 function setPoss(team) {
   if (team !== S.poss) { S.shotClock = 24; S.poss = team; S.fc = false; S.bcT = 0; for (const p of players) { p.keyT = 0; p.dkeyT = 0; p.post = null; } S.screen = [null, null]; if (team >= 0) aiCoach(team); }
 }
@@ -440,7 +440,44 @@ function shotWindow(p, d, cd, three, moving) {
   w *= 0.85 + 0.15 * p.sta;
   return clamp(w, 0.025, 0.09);
 }
+// ---- 真人動作：跳投、運球用 CMU 動作捕捉，依遊戲的時間軸對齊播放 ----
+function mocapFor(p, dt) {
+  let want = null;
+  const spd = hyp(p.vel.x, p.vel.z), jv0 = p.jv0 || 1;
+  // 空中三段：上升（起跳→最高點）、下降（最高點→落地）
+  const airF = (a, top, land) => p.jv > 0 ? a + clamp(1 - p.jv / jv0, 0, 1) * (top - a) : top + clamp(-p.jv / jv0, 0, 1) * (land - top);
+  if (p.action === 'shoot' && p.shotKind === 'jump') {
+    const ev = clipInfo('jumpshot').ev; let f;
+    if (!p.jv0 && p.jy <= 0.001) f = 12 + clamp(p.actT / 0.2, 0, 1) * (ev.takeoff - 12); // 下蹲蓄力
+    else if (p.jy > 0.001 || p.jv > 0) f = airF(ev.takeoff, ev.release, ev.land);
+    else f = ev.land + clamp(1 - Math.max(0, p.landT) / 0.18, 0, 1) * 8; // 落地緩衝
+    want = { name: 'jumpshot', f };
+  } else if (p.action === 'gather' || p.action === 'layup') {
+    const c = clipInfo('layup'), ev = c.ev, top = ev.takeoff + 3;
+    const f = p.action === 'gather' ? ev.takeoff - 7 + clamp(p.actT / 0.2, 0, 1) * 7 : (p.jy > 0.001 || p.jv > 0) ? airF(ev.takeoff, top, ev.land) : ev.land + 3;
+    want = { name: 'layup', f };
+  } else if (p.action === 'rebound' || (ball.holder === p && p.pose === 'secure')) {
+    const c = clipInfo('rebound'), ev = c.ev, top = ev.grab + 1;
+    let f;
+    if (p.action === 'rebound' && (p.jy > 0.001 || p.jv > 0)) f = airF(ev.takeoff, top, ev.land);
+    else if (p.pose === 'secure') f = ev.land + clamp(1 - Math.max(0, p.secureT) / 0.55, 0, 1) * (c.n - 1 - ev.land);
+    if (f != null) want = { name: 'rebound', f };
+  } else if (p.pose === 'catch' && ball.pass && ball.pass.to === p) {
+    const ev = clipInfo('catch').ev; want = { name: 'catch', f: ev.grab - clamp((ball.pass.T - ball.pass.t) * 30, 0, ev.grab) };
+  } else if (ball.holder === p && p.pose === 'dribble' && !(p.moveT > 0)) {
+    // 走著運球用 CMU；跑起來換 BallPlay 的跑動運球（有真實球路）
+    const fast = p.mo && p.mo.name === 'drun' ? spd > 1.9 : spd > 2.5;
+    if (fast) { const c = clipInfo('drun'); p.moDrun = (p.moDrun || 0) + dt * 30 * clamp(spd / c.speed, 0.6, 1.8); want = { name: 'drun', f: p.moDrun, mirror: (p.hand || 1) < 0 }; }
+    else { p.moDrib = (p.moDrib || 0) + dt * 30 * clamp(spd / 1.5, 0.45, 1.9); want = { name: 'dribble', f: p.moDrib, mirror: (p.hand || 1) < 0, legs: clamp((spd - 0.3) / 0.9, 0, 1) }; }
+  }
+  const target = want ? 1 : 0;
+  if (want && p.mo && p.mo.name !== want.name) p.moW = Math.min(p.moW || 0, 0.35); // 換片段時淡入，避免跳動
+  p.moW = (p.moW || 0) + (target - (p.moW || 0)) * Math.min(1, dt * (want ? 14 : 9));
+  if (want) p.mo = want;
+  if (!want && p.moW < 0.01) p.mo = null;
+}
 function startShot(p) {
+  p.jv0 = 0;
   if (p.action || p.jy > 0) return;
   const d = distB(p);
   const [, cd] = nearestOpp(p);
@@ -2532,6 +2569,7 @@ function render(dt) {
   }
   referee.lookAt = lb;
   if (!replay) {
+    if (SET.mocap !== false) for (const p of players) mocapFor(p, dt);
     for (const p of players) animatePlayer(p, dt);
     animatePlayer(referee, dt);
   }
@@ -2552,7 +2590,24 @@ function render(dt) {
   if (ball.state === 'held' && hb && !replay) {
     hb.rig.root.updateMatrixWorld(true);
     const pose = hb.pose;
-    if (pose === 'dribble' || pose === 'hesi') {
+    if (pose === 'dribble' && hb.mo && hb.mo.name === 'drun' && hb.moW > 0.6) {
+      // 真實球路：片段裡錄下的球位置（角色座標）轉到場上
+      const lb = new THREE.Vector3(); clipBall('drun', hb.mo.f, hb.mo.mirror, lb);
+      lb.multiplyScalar(hb.scale); lb.applyAxisAngle(new THREE.Vector3(0, 1, 0), hb.facing);
+      vis = lb.add(hb.pos); vis.y = Math.max(BALL_R, vis.y);
+      // 跟手掌的位置混合，避免骨架比例不同造成球離手
+      const hw = handWorld(hb.rig, (hb.hand || 1) > 0); const dh = vis.distanceTo(hw);
+      if (vis.y > 0.75 && dh < 0.45) vis.lerp(hw.addScaledVector(new THREE.Vector3(0, -1, 0), BALL_R + 0.02), 0.6);
+    } else if ((pose === 'dribble' || pose === 'hesi') && hb.mo && hb.mo.name === 'dribble' && hb.moW > 0.5) {
+      // 真人運球：手最低點把球推出 → 落地 → 彈回手上，跟著手的節奏
+      const ci = clipInfo('dribble'), top = handWorld(hb.rig, (hb.hand || 1) > 0); top.y -= BALL_R + 0.03;
+      const ph = ((((hb.mo.f - ci.lows[0]) % ci.n) + ci.n) % ci.n) / ci.n;
+      let y;
+      if (ph < 0.42) y = top.y - (top.y - BALL_R) * Math.pow(ph / 0.42, 1.5);
+      else if (ph < 0.86) y = BALL_R + (top.y - BALL_R) * (1 - Math.pow(1 - (ph - 0.42) / 0.44, 1.5));
+      else y = top.y;
+      vis = new THREE.Vector3(top.x, y, top.z);
+    } else if (pose === 'dribble' || pose === 'hesi') {
       const top = handWorld(hb.rig, (hb.hand || 1) > 0); top.y -= BALL_R + 0.03;
       const c = Math.abs(Math.cos(hb.dribblePh));
       vis = new THREE.Vector3(top.x, BALL_R, top.z).lerp(top, c);
