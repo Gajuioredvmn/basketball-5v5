@@ -134,7 +134,7 @@ const distB = (p, team = p.team) => hyp(p.pos.x - basketX(team), p.pos.z);
 const fwd = p => new THREE.Vector3(Math.sin(p.facing), 0, Math.cos(p.facing));
 const opp = p => teams[1 - p.team];
 const inFront = (team, x) => x * S.attack[team] > 0.05;
-const inKey = (x, z, side) => Math.abs(z) < KEY_HALF && x * side > FT_X;
+const inKey = (x, z, side) => Math.abs(z) < KEY_HALF && x * side > FT_X && x * side <= HX; // 底線外（出界）不算禁區
 const tag = p => `#${p.num} ${POS_NAMES[p.role]}`;
 function nearestOpp(p) { let best = null, bd = 1e9; for (const q of opp(p)) { const d = hyp(q.pos.x - p.pos.x, q.pos.z - p.pos.z); if (d < bd) { bd = d; best = q; } } return [best, bd]; }
 function isThreeSpot(x, z, team) {
@@ -2144,18 +2144,21 @@ function updatePlayers(dt) {
   if (h && S.phase === 'live' && h.jy === 0 && (Math.abs(h.pos.x) > HX || Math.abs(h.pos.z) > HZ)) { S.stats[h.team].tov++; h.st.tov++; outOfBounds(h.pos.x, h.pos.z, h.team); }
 }
 // ---- 違例判定 ----
+// 3 秒的計時歸零：投籃出手、球沒人控制、死球、換球權時（NBA 規則）
+const resetKeyT = () => { for (const p of players) { p.keyT = 0; p.dkeyT = 0; } };
 function checkViolations(dt) {
-  if (S.phase !== 'live' || S.poss < 0) return;
+  if (S.phase !== 'live' || S.poss < 0) { resetKeyT(); return; }
   const t = S.poss, s = S.attack[t];
   const h = ball.holder;
   const control = ball.state === 'held' || ball.state === 'pass';
-  if (!control) return;
+  if (S.keyPoss !== t) { S.keyPoss = t; resetKeyT(); }
+  if (!control) { resetKeyT(); return; }
   if (h && h.team === t) {
     if (inFront(t, h.pos.x)) S.fc = true;
     else if (S.fc && h.jy === 0 && h.pos.x * s < -0.3) { violation('回場違例'); return; }
   }
   if (!S.fc) { S.bcT += dt; if (S.bcT > 8) { violation('8 秒違例'); return; } }
-  if (!S.fc) return;
+  if (!S.fc) { resetKeyT(); return; }
   for (const p of teams[t]) {
     if (inKey(p.pos.x, p.pos.z, s) && !(p === h && p.action)) { p.keyT += dt; if (p.keyT > 3) { violation(`3 秒違例 ${tag(p)}`); return; } } else p.keyT = 0;
   }
