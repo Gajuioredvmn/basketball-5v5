@@ -951,6 +951,13 @@ function updateFT(dt) {
     }
   } else if (ft.stage === 'aim') {
     sh.facing = Math.atan2(basketX(sh.team) - sh.pos.x, -sh.pos.z);
+    // 罰球 10 秒：拿到球後 10 秒內沒出手＝違例，這一罰不算
+    if (ft.t > 10 && !sh.action) {
+      sfx.whistle(); msg(`罰球 10 秒違例 ${tag(sh)}`); pbp(`${TEAM_INFO[sh.team].name} ${tag(sh)} 罰球 10 秒違例`); S.stats[sh.team].fta++; sh.st.fta++;
+      if (ft.k < ft.n - 1 || ft.keep) { ball.state = 'dead'; ball.holder = null; ft.stage = 'between'; ft.t = 0; }
+      else { const s2 = S.attack[sh.team]; S.ft = null; deadBall({ team: 1 - sh.team, kind: 'side', x: s2 * FT_X, z: HZ + 0.45 }, 1.4); }
+      return;
+    }
     if (isUser(sh)) {
       if (inp.b1Down && !sh.action) { sh.action = 'ftshoot'; sh.actT = 0; const z = document.querySelector('#meter .zone'); z.style.bottom = '84%'; z.style.height = '14%'; }
       if (sh.action === 'ftshoot' && (inp.b1Up || sh.actT > 0.75)) releaseFT(sh.actT / 0.6);
@@ -1235,6 +1242,9 @@ function updateInbound(dt) {
     if (hyp(th.pos.x - ball.pos.x, th.pos.z - ball.pos.z) < 0.6 || ib.t > 4) {
       ball.state = 'held'; ball.holder = th; ball.lastTeam = th.team; ib.step = 'wait'; ib.t = 0;
     }
+  } else if (ib.step === 'wait' && ib.t > 5) { // 發球 5 秒違例：換對方在同一點發球
+    sfx.whistle(); msg('發球 5 秒違例'); pbp(`${TEAM_INFO[ib.team].name} 發球 5 秒違例`); S.stats[ib.team].tov++; ib.thrower.st.tov++;
+    S.ib = null; deadBall({ team: 1 - ib.team, kind: ib.kind, x: ib.spot.x, z: ib.spot.z }, 1.3); return;
   } else if (ib.step === 'wait') {
     th.facing = Math.atan2(ib.inward.x, ib.inward.z);
     if (ib.t > 1.1 && hyp(th.pos.x - ib.spot.x, th.pos.z - ib.spot.z) < 0.5 || ib.t > 3) { doPass(th, ib.receiver, 10); ib.step = 'passed'; th.noGrabT = 0.6; }
@@ -1792,6 +1802,7 @@ function aiHandler(p, dt) {
   const back = p.pos.x * s < 0.5;
   if (!p.drive) p.drive = { x: p.pos.x, z: p.pos.z };
   if (S.phase !== 'live' || p.action || p.jy > 0 || p.moveT > 0) return p.drive;
+  if ((p.backT || 0) > 3.6) { p.post = null; startShot(p); return p.drive; } // 快到 5 秒背身運球就出手
   if (p.decT > 0) return p.drive;
   p.decT = rand(0.18, 0.32);
   const d = distB(p);
@@ -2161,6 +2172,11 @@ function checkViolations(dt) {
   if (!S.fc) { resetKeyT(); return; }
   for (const p of teams[t]) {
     if (inKey(p.pos.x, p.pos.z, s) && !(p === h && p.action)) { p.keyT += dt; if (p.keyT > 3) { violation(`3 秒違例 ${tag(p)}`); return; } } else p.keyT = 0;
+  }
+  // 5 秒背身運球：罰球線延伸線以下，背對或側對籃框運球超過 5 秒
+  if (h && h.team === t && h.pose !== 'hold' && !h.action && h.jy === 0) {
+    const bx = basketX(t), toB = Math.atan2(bx - h.pos.x, -h.pos.z), off = Math.abs(Math.atan2(Math.sin(h.facing - toB), Math.cos(h.facing - toB)));
+    if (h.pos.x * s > FT_X && (h.post || off > 1.2)) { h.backT = (h.backT || 0) + dt; if (h.backT > 5) { h.backT = 0; violation(`5 秒背身運球違例 ${tag(h)}`); return; } } else h.backT = 0;
   }
   for (const p of teams[1 - t]) {
     let guarding = false; for (const q of teams[t]) if (hyp(q.pos.x - p.pos.x, q.pos.z - p.pos.z) < 1.7) { guarding = true; break; }
@@ -2918,5 +2934,5 @@ for (let t = 0; t < 2; t++) roster[t].forEach(p => { if (!p.onCourt) p.pos.copy(
 startTipoff(); S.phase = 'title'; ball.state = 'dead'; ball.pos.set(0, BALL_R, 1);
 camLook.set(0, 0.6, 0);
 if (AUTO) { S.qlen = +(params.get('q') || 60); S.diff = 1; newGame(); }
-window.__g = { setRunOfs: v => { RUN_OFS = v; }, THREE, scene, referee, doMove, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
+window.__g = { startFT, setRunOfs: v => { RUN_OFS = v; }, THREE, scene, referee, doMove, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
 requestAnimationFrame(frame);
