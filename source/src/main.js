@@ -1720,7 +1720,20 @@ function reboundTarget(p, ch) {
   }
   return null;
 }
+// 電腦球員避免 3 秒：進攻時在禁區待超過 1.4 秒，不管原本要去哪裡，都先走到禁區外最近的地方
 function aiTarget(p, ch) {
+  const t = aiTarget0(p, ch);
+  if (S.phase === 'live' && S.poss === p.team && ball.holder !== p && (p.keyT || 0) > 1.4 && !(ball.state === 'pass' && ball.pass && ball.pass.to === p)) {
+    const s = S.attack[p.team];
+    if (inKey(t.x, t.z, s) || inKey(p.pos.x, p.pos.z, s)) {
+      const outZ = (p.pos.z < 0 ? -1 : 1) * (KEY_HALF + 0.6), outX = s * (FT_X - 0.6);
+      const dz = Math.abs(outZ - p.pos.z), dx = Math.abs(outX - p.pos.x);
+      return dz < dx ? { x: p.pos.x, z: outZ, spd: 1, sprint: (p.keyT || 0) > 2.2 } : { x: outX, z: p.pos.z, spd: 1, sprint: (p.keyT || 0) > 2.2 };
+    }
+  }
+  return t;
+}
+function aiTarget0(p, ch) {
   const ph = S.phase;
   if (['tipoff', 'break', 'over', 'title', 'intro', 'timeout', 'replay'].includes(ph)) return { x: p.pos.x, z: p.pos.z, spd: 0 };
   if (p.ftSpot && (ph === 'ft' || (ph === 'live' && ball.state === 'shot' && ball.shot && ball.shot.kind === 'ft' && ball.vel.y > 0))) return { x: p.ftSpot.x, z: p.ftSpot.z, spd: 0.55, face: ball.holder || null };
@@ -1809,6 +1822,7 @@ function aiHandler(p, dt) {
   if (!p.drive) p.drive = { x: p.pos.x, z: p.pos.z };
   if (S.phase !== 'live' || p.action || p.jy > 0 || p.moveT > 0) return p.drive;
   if ((p.backT || 0) > 3.6) { p.post = null; startShot(p); return p.drive; } // 快到 5 秒背身運球就出手
+  if ((p.keyT || 0) > 2.3) { p.post = null; startShot(p); return p.drive; } // 拿球在禁區快 3 秒：直接出手
   if (p.decT > 0) return p.drive;
   p.decT = rand(0.18, 0.32);
   const d = distB(p);
@@ -2189,7 +2203,7 @@ function checkViolations(dt) {
         const bx = s * (HX - 2.9), awayV = p.pos.x * s > FT_X ? ((p.pos.x - bx) * p.vel.x + p.pos.z * p.vel.z) / Math.max(0.3, hyp(p.pos.x - bx, p.pos.z)) : 0;
         const leaving = p !== h && awayV > 0.8 && p.keyT < 4.5;
         const attacking = p === h && (p.post || p.moveT > 0 || (hyp(p.vel.x, p.vel.z) > 0.8 && distB(p) < p.prevDistB) || p.keyT < 3.0 + (p.recvInKey ? 1.5 : 0));
-        if (!leaving && !attacking) { violation(`3 秒違例 ${tag(p)}`); return; }
+        if (!leaving && !attacking) { S.v3 = (S.v3 || 0) + 1; violation(`3 秒違例 ${tag(p)}`); return; }
       }
       if (p === h) p.prevDistB = distB(p);
     } else { p.keyT = 0; p.recvInKey = false; }
@@ -2204,7 +2218,7 @@ function checkViolations(dt) {
     if (inKey(p.pos.x, p.pos.z, s) && !guarding) {
       p.dkeyT += dt;
       if (p.dkeyT > 3) {
-        sfx.whistle(); msg(`防守 3 秒 ${tag(p)}　技術犯規罰 1 球`);
+        S.d3 = (S.d3 || 0) + 1; sfx.whistle(); msg(`防守 3 秒 ${tag(p)}　技術犯規罰 1 球`);
         S.stats[p.team].pf++; p.dkeyT = 0;
         const shooter = teams[t].slice().sort((a, b) => b.ft - a.ft)[0];
         deadBall({ ft: true, shooter, n: 1, keep: true }, 1.3);
