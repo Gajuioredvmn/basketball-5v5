@@ -514,7 +514,7 @@ export function animatePlayer(p, dt) {
     const fwdOf = (th, kn, zr) => { const [A, B] = AB(kn); return -(A * Math.cos(zr) * Math.sin(th) + B * Math.cos(th)); };
     // 身體高度先決定（平順），兩隻腳再用反向運動學去配合它：踩地的腳剛好踩在原地，不會因為步伐讓整個人一上一下跳
     const Dk = kq => Math.sqrt(L1 * L1 + L2 * L2 + 2 * L1 * L2 * Math.cos(kq));
-    const dropT = P.bodyY !== null ? Math.max(0, -P.bodyY) : 0.9 - Dk(kPose); // 姿勢有指定身體高度（例如防守蹲低）就用它
+    const dropT = P.bodyY !== null ? Math.max(0, -P.bodyY) * (shuffle || spd < 2.2 ? 1 : Math.max(0.35, 1 - (spd - 2.2) / 2)) : 0.9 - Dk(kPose); // 姿勢指定的蹲低（例如防守）；真的跑起來時人會站高一點 // 姿勢有指定身體高度（例如防守蹲低）就用它
     p._dropS = p._dropS == null ? dropT : p._dropS + (dropT - p._dropS) * Math.min(1, dt * 10);
     const legOut = [];
     const moving = p._mv = spd > (p._mv ? 0.2 : 0.45); // 有遲滯，速度在門檻附近時不會一下走一下停
@@ -566,7 +566,7 @@ export function animatePlayer(p, dt) {
     for (const [nm, lx, lz, lift] of legOut) if (!lift && !(lz * dirS < 0 && moving)) {
       const need = 0.9 - Math.sqrt(Math.max(0.01, LM * LM - lx * lx - lz * lz)), F = ft[nm === 'L' ? 0 : 1];
       // 急轉向、急換方向時：踩著的腳離身體太遠就跨一步（抬腳換位置），不會為了搆到它把身體壓得很低
-      if (need > p._dropS + 0.1 && F.on && !ft[nm === 'L' ? 1 : 0].step) { F.on = false; F.step = { t: 0, fx: F.x, fz: F.z }; continue; }
+      if (need > p._dropS + 0.1) { if (F.on) { F.on = false; F.step = { t: 0, fx: F.x, fz: F.z }; } continue; }
       anyOn = true; drop = Math.max(drop, need); }
     for (const [, , lz, lift] of legOut) if (!lift && lz * dirS < 0 && moving) anyOn = true; // 後腳只靠墊腳尖配合，搆不到就提早蹬離地面，不把身體往下拉
     // 跑步騰空（兩腳都離地）時身體高度從離地那一刻平順接到下一次落地，不會突然掉下去
@@ -574,7 +574,8 @@ export function animatePlayer(p, dt) {
     // 跑步的自然起伏：每一步踩地中間身體最低、騰空時最高（平滑的波，幅度幾公分）
     // 走路：腳跟著地（兩腳同時踩地）時最低、單腳撐地時最高，起伏約 2 公分
     if (moving && !shuffle) { const wk = Math.max(0, Math.min(1, (2.4 - spd) / 0.6)); drop += (1 - wk) * Math.min(0.055, Math.max(0, spd - 2) * 0.03 + 0.01) * (0.5 + 0.5 * Math.cos(2 * (ph - Math.PI * duty))) + wk * 0.022 * Math.min(1, spd) * (0.5 + 0.5 * Math.cos(2 * ph)); }
-    if (p._dropIK != null) drop = Math.max(drop, p._dropIK - 0.5 * dt); // 身體往上回升有速度上限（往下蹲多一點腳一定搆得到，不會浮空）
+    drop = Math.min(drop, p._dropS + 0.12); // 身體最多只比姿勢本來的高度再低 16 公分：絕不會蹲到像跪地
+    if (p._dropIK != null) drop = Math.max(drop, p._dropIK - 1.2 * dt); // 身體往上回升有速度上限（往下蹲多一點腳一定搆得到，不會浮空）
     p._dropH = drop;
     p._dropIK = drop;
     const v = 0.9 - drop;
