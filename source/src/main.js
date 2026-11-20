@@ -2171,6 +2171,7 @@ function checkViolations(dt) {
   const h = ball.holder;
   const control = ball.state === 'held' || ball.state === 'pass';
   if (S.keyPoss !== t) { S.keyPoss = t; resetKeyT(); }
+  if (h && h !== S.keyHolder) { S.keyHolder = h; if (h.team === t && inKey(h.pos.x, h.pos.z, s)) h.recvInKey = true; }
   if (!control) { resetKeyT(); return; }
   if (h && h.team === t) {
     if (inFront(t, h.pos.x)) S.fc = true;
@@ -2179,7 +2180,19 @@ function checkViolations(dt) {
   if (!S.fc) { S.bcT += dt; if (S.bcT > 8) { violation('8 秒違例'); return; } }
   if (!S.fc) { resetKeyT(); return; }
   for (const p of teams[t]) {
-    if (inKey(p.pos.x, p.pos.z, s) && !(p === h && p.action)) { p.keyT += dt; if (p.keyT > 3) { violation(`3 秒違例 ${tag(p)}`); return; } } else p.keyT = 0;
+    if (inKey(p.pos.x, p.pos.z, s) && !(p === h && p.action)) {
+      p.keyT += dt;
+      if (p.keyT > 3) {
+        // 裁判的寬容（照 NBA 實際吹法）：
+        // 1. 沒拿球、正在往禁區外走（沒有得利）→ 先不吹（最多再給 1.5 秒走出去）
+        // 2. 在禁區接到球、正在運球攻擊籃框或背打 → 不吹（出手前都算進攻動作）
+        const bx = s * (HX - 2.9), awayV = p.pos.x * s > FT_X ? ((p.pos.x - bx) * p.vel.x + p.pos.z * p.vel.z) / Math.max(0.3, hyp(p.pos.x - bx, p.pos.z)) : 0;
+        const leaving = p !== h && awayV > 0.8 && p.keyT < 4.5;
+        const attacking = p === h && (p.post || p.moveT > 0 || (hyp(p.vel.x, p.vel.z) > 0.8 && distB(p) < p.prevDistB) || p.keyT < 3.0 + (p.recvInKey ? 1.5 : 0));
+        if (!leaving && !attacking) { violation(`3 秒違例 ${tag(p)}`); return; }
+      }
+      if (p === h) p.prevDistB = distB(p);
+    } else { p.keyT = 0; p.recvInKey = false; }
   }
   // 5 秒背身運球：罰球線延伸線以下，背對或側對籃框運球超過 5 秒
   if (h && h.team === t && h.pose !== 'hold' && !h.action && h.jy === 0) {
