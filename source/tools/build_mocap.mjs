@@ -1,6 +1,7 @@
 // 產生 src/mocapData.js：遊戲用的真人動作片段（已轉成遊戲骨架）
 // 來源：CMU Graphics Lab Motion Capture Database（免費使用）、SkillMimic BallPlay-M（Apache 2.0）
 import fs from 'fs';
+import zlib from 'zlib';
 import { retarget, pack, BONES, stanceSpeed } from './retarget.mjs';
 const D = '/tmp/cm/data/', SM = '/tmp/smj/';
 const clips = {};
@@ -156,4 +157,15 @@ const GROUPS = { rebStand: [], rebound: ['rebound'], catch: ['catch'], pick: [],
   } }
 const meta = Object.fromEntries(Object.entries(clips).map(([k, v]) => [k, { ...v, data: v.data.length }]));
 console.log(JSON.stringify(meta, null, 0));
-fs.writeFileSync('src/mocapData.js', '// 真人動作資料（已轉成遊戲骨架），由 tools/build_mocap.mjs 產生\n// 來源：CMU Graphics Lab Motion Capture Database（mocap.cs.cmu.edu，免費使用）、SkillMimic BallPlay-M（github.com/wyhuai/SkillMimic，Apache 2.0）、Quaternius Universal Animation Library 1 & 2（CC0）\nexport const MOCAP_BONES = ' + JSON.stringify(BONES) + ';\nexport const MOCAP = ' + JSON.stringify(clips) + ';\nexport const MOCAP_GROUPS = ' + JSON.stringify(GROUPS) + ';\n');
+// 壓縮：每個片段改成「逐個通道、相鄰幀相減」（數字變很小），四元數再降到 1/4096 精度（肉眼看不出），全部合在一起用 deflate 壓縮
+const NB = BONES.length * 4, metas = {}, chunks = []; let off = 0;
+for (const [name, c] of Object.entries(clips)) {
+  const b = Buffer.from(c.data, 'base64'), a = new Int16Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length));
+  const per = NB + 1 + (c.ball ? 4 : 0), n = a.length / per, t = new Int16Array(a.length); let k = 0;
+  for (let ch = 0; ch < per; ch++) { let prev = 0; for (let f = 0; f < n; f++) { const v = ch < NB ? a[f * per + ch] >> 3 : a[f * per + ch]; t[k++] = v - prev; prev = v; } }
+  chunks.push(Buffer.from(t.buffer)); const { data, ...m } = c; metas[name] = { ...m, o: off, len: a.length }; off += a.length;
+}
+const blob = zlib.deflateRawSync(Buffer.concat(chunks), { level: 9 }).toString('base64');
+console.error('mocap blob', blob.length, 'bytes (base64)');
+const clipsOut = metas;
+fs.writeFileSync('src/mocapData.js', '// 真人動作資料（已轉成遊戲骨架），由 tools/build_mocap.mjs 產生\n// 來源：CMU Graphics Lab Motion Capture Database（mocap.cs.cmu.edu，免費使用）、SkillMimic BallPlay-M（github.com/wyhuai/SkillMimic，Apache 2.0）、Quaternius Universal Animation Library 1 & 2（CC0）\nexport const MOCAP_BONES = ' + JSON.stringify(BONES) + ';\nexport const MOCAP = ' + JSON.stringify(clipsOut) + ';\nexport const MOCAP_BLOB = "' + blob + '";\nexport const MOCAP_GROUPS = ' + JSON.stringify(GROUPS) + ';\n');

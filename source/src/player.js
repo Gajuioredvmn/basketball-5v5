@@ -2,18 +2,26 @@ import * as THREE from 'three';
 import { TEAM_INFO } from './const.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { MOCAP, MOCAP_BONES } from './mocapData.js';
+import { MOCAP, MOCAP_BONES, MOCAP_BLOB } from './mocapData.js';
 
 // ---- 真人動作（CMU 動作捕捉）播放 ----
 const CLIPS = {};
-for (const [name, c] of Object.entries(MOCAP)) {
-  const bin = atob(c.data), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  CLIPS[name] = { ...c, a: new Int16Array(u8.buffer), per: MOCAP_BONES.length * 4 + 1 + (c.ball ? 4 : 0), hy: MOCAP_BONES.length * 4 };
-}
+// 片段的說明資料（長度、事件幀等）馬上可用；動作數字是壓縮的，開啟時在背景解壓（約幾十毫秒），解完之前先用程式動作
+for (const [name, c] of Object.entries(MOCAP)) CLIPS[name] = { ...c, a: null, per: MOCAP_BONES.length * 4 + 1 + (c.ball ? 4 : 0), hy: MOCAP_BONES.length * 4 };
+export const mocapReady = (async () => {
+  const bin = atob(MOCAP_BLOB), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const buf = await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+  const D = new Int16Array(buf), NB = MOCAP_BONES.length * 4;
+  for (const c of Object.values(CLIPS)) {
+    const per = c.per, n = c.len / per, a = new Int16Array(c.len); let k = c.o;
+    for (let ch = 0; ch < per; ch++) { let v = 0; const sh = ch < NB ? 8 : 1; for (let f = 0; f < n; f++) { v += D[k++]; a[f * per + ch] = v * sh; } }
+    c.a = a;
+  }
+})().catch(e => console.warn('mocap decode failed', e));
 export const clipInfo = name => CLIPS[name];
 // 片段裡球的位置（角色自己的座標：面向 +z、腳底中心為原點）與手有沒有碰到球
 export function clipBall(name, f, mirror, out) {
-  const c = CLIPS[name]; if (!c || !c.ball) return null;
+  const c = CLIPS[name]; if (!c || !c.ball || !c.a) return null;
   const n = c.n; let f0 = Math.floor(f), t = f - f0;
   if (c.loop) f0 = ((f0 % n) + n) % n; else { f0 = Math.max(0, Math.min(n - 1, f0)); if (f0 === n - 1) t = 0; }
   const f1 = c.loop ? (f0 + 1) % n : Math.min(n - 1, f0 + 1), o0 = f0 * c.per + c.hy + 1, o1 = f1 * c.per + c.hy + 1, A = c.a;
@@ -27,6 +35,7 @@ function clipQuat(c, fi, b, out) { const o = fi * c.per + b * 4, A = c.a; return
 function boneList(r) { return [r.hips, r.torso, r.chest, r.neck, r.headG, r.legL.hip, r.legL.knee, r.legL.ankle, r.legR.hip, r.legR.knee, r.legR.ankle, r.armL.sh, r.armL.el, r.armL.wr, r.armR.sh, r.armR.el, r.armR.wr]; }
 // 把片段第 f 幀（可以是小數，會內插）套到骨架上；w 是混合比例，mask(i) 回傳每根骨頭的比例
 function applyClip(r, c, f, w, mirror, mask) {
+  if (!c.a) return 0;
   const n = c.n; let f0 = Math.floor(f), t = f - f0;
   if (c.loop) { f0 = ((f0 % n) + n) % n; } else { f0 = Math.max(0, Math.min(n - 1, f0)); if (f0 === n - 1) t = 0; }
   const f1 = c.loop ? (f0 + 1) % n : Math.min(n - 1, f0 + 1);

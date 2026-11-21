@@ -221,11 +221,12 @@ const pad = $('pad');
 // 點場上的隊友：持球時直接傳給他；防守時改控制他。用「輕點」判斷（按下到放開不到 0.28 秒、幾乎沒移動），不會跟搖桿衝突
 const taps = new Map();
 function tapPlayer(cx, cy) {
-  if (S.phase !== 'live' || !ctrl || S.paused) return false;
+  const ibTap = S.phase === 'inbound' && S.ib && S.ib.team === 0 && S.ib.step === 'wait' && !AUTO; // 我方發界外球：點隊友＝傳給他
+  if ((S.phase !== 'live' && !ibTap) || !ctrl || S.paused) return false;
   const rect = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector3();
   let best = null, bd = 1e9;
   for (const t of teams[0]) {
-    if (t === ctrl) continue;
+    if (ibTap ? t === S.ib.thrower : t === ctrl) continue;
     for (const hgt of [0.5, 1.1, 1.7]) { // 腳、腰、頭三個點，點到身上任何地方都算
       v.set(t.pos.x, (hgt + t.jy) * t.scale, t.pos.z).project(camera);
       if (v.z > 1) continue;
@@ -234,6 +235,7 @@ function tapPlayer(cx, cy) {
     }
   }
   if (!best || bd > Math.max(48, rect.height * 0.12)) return false;
+  if (ibTap) { S.ib.tapTo = best; ctrl = best; buzz(15); return true; }
   if (ball.holder === ctrl) { if (!ctrl.action) { doPass(ctrl, best); buzz(15); } }
   else if (!ball.holder || ball.holder.team !== 0) { ctrl = best; buzz(10); }
   else return false;
@@ -888,7 +890,7 @@ function doMove(p, kind, side, dir) {
 // ================= 犯規與罰球 =================
 function callFoul(def, off, kind, nShots, andMaybe) {
   if (S.phase !== 'live') return;
-  sfx.whistle();
+  sfx.whistle(); (S.fk = S.fk || {})[kind] = (S.fk[kind] || 0) + 1;
   def.st.pf++; S.stats[def.team].pf++;
   // 被犯規的人被撞到的反應、犯規的人搖頭抗議
   if (off && off.jy <= 0.001) react(off, kind === 'charge' ? 'hitBack' : Math.random() < 0.5 ? 'hitChest' : 'hitHead', 0);
@@ -910,7 +912,7 @@ function callFoul(def, off, kind, nShots, andMaybe) {
     deadBall({ team: 1 - def.team, kind: 'side', x: clamp(def.pos.x, -12, 12), z: (def.pos.z < 0 ? -1 : 1) * (HZ + 0.45) }, 1.4);
   } else {
     const bonus = S.teamFouls[def.team] >= 5;
-    msg(`${kind === 'reach' ? '打手犯規' : '阻擋犯規'} ${tag(def)}${pfTxt}${bonus ? '　加罰' : ''}`);
+    msg(`${kind === 'reach' ? '打手犯規' : kind === 'loose' ? '搶籃板犯規（越背）' : '阻擋犯規'} ${tag(def)}${pfTxt}${bonus ? '　加罰' : ''}`);
     if (bonus) deadBall({ ft: true, shooter: off, n: 2 }, 1.3);
     else {
       if (S.shotClock < 14 && inFront(off.team, off.pos.x)) S.shotClock = 14;
@@ -1132,7 +1134,13 @@ function tryGrab() {
     const top = 2.45 * p.scale + p.jy + (p.pose === 'rebound' || p.pose === 'block' ? 0.15 : 0);
     if (d < 0.55 * p.scale && ball.pos.y < top && ball.pos.y > 0.05) { const sc = d - p.reb * 0.15 + rand(0, 0.12) - (p.boxing ? 0.08 : 0) + (p.boxedT > 0 ? 0.1 : 0); if (sc < bd) { bd = sc; best = p; } }
   }
-  if (best) { if (S.phase !== 'live' && S.phase !== 'tipoff') return; giveBall(best, (ball.state === 'shot' || ball.missed) ? 'rebound' : 'loose'); }
+  if (best) { if (S.phase !== 'live' && S.phase !== 'tipoff') return;
+    // 越背犯規：被卡位的人從後面壓過卡位者頭上搶球
+    if ((ball.state === 'shot' || ball.missed) && best.boxedT > 0 && best.jy > 0.05) {
+      const bx = players.find(q => q.team !== best.team && q.boxing && hyp(q.pos.x - best.pos.x, q.pos.z - best.pos.z) < 0.7 && hyp(q.pos.x - ball.pos.x, q.pos.z - ball.pos.z) < hyp(best.pos.x - ball.pos.x, best.pos.z - ball.pos.z));
+      if (bx && Math.random() < 0.35) { ball.state = 'loose'; callFoul(best, bx, 'loose'); return; }
+    }
+    giveBall(best, (ball.state === 'shot' || ball.missed) ? 'rebound' : 'loose'); }
 }
 function goaltend(sh, q) {
   sfx.whistle(); msg('干擾球！進球算');
@@ -1251,6 +1259,13 @@ function updateInbound(dt) {
   } else if (ib.step === 'wait' && ib.t > 5) { // 發球 5 秒違例：換對方在同一點發球
     sfx.whistle(); msg('發球 5 秒違例'); pbp(`${TEAM_INFO[ib.team].name} 發球 5 秒違例`); S.stats[ib.team].tov++; ib.thrower.st.tov++;
     S.ib = null; deadBall({ team: 1 - ib.team, kind: ib.kind, x: ib.spot.x, z: ib.spot.z }, 1.3); return;
+  } else if (ib.step === 'wait' && ib.team === 0 && !AUTO) {
+    // 我方發界外球由玩家決定：按「傳球」傳給你正在控制的球員，或直接點隊友；5 秒內要傳出去
+    th.facing = Math.atan2(ib.inward.x, ib.inward.z);
+    if (!ib.hinted) { ib.hinted = true; msg('發界外球：按「傳球」傳給你控制的人，或直接點隊友（5 秒內）'); }
+    if (ctrl === th) ctrl = ib.receiver;
+    const ready = hyp(th.pos.x - ib.spot.x, th.pos.z - ib.spot.z) < 0.5 || ib.t > 1.2;
+    if (ready && (inp.b2Down || ib.tapTo)) { const to = ib.tapTo || ctrl; ib.receiver = to; doPass(th, to, 10); ib.step = 'passed'; th.noGrabT = 0.6; ctrl = to; }
   } else if (ib.step === 'wait') {
     th.facing = Math.atan2(ib.inward.x, ib.inward.z);
     if (ib.t > 1.1 && hyp(th.pos.x - ib.spot.x, th.pos.z - ib.spot.z) < 0.5 || ib.t > 3) { doPass(th, ib.receiver, 10); ib.step = 'passed'; th.noGrabT = 0.6; }
@@ -2157,10 +2172,15 @@ function updatePlayers(dt) {
       // 持球者高速撞上站定的防守者
       if (S.phase === 'live' && S.chargeCD < 0 && a.team !== b.team) {
         const [h, df, sgn] = ball.holder === a ? [a, b, 1] : (ball.holder === b ? [b, a, -1] : [null]);
-        if (h && h.jy === 0 && df.pose === 'defense' && hyp(df.vel.x, df.vel.z) < 1.2 && (h.vel.x * nx + h.vel.z * nz) * sgn > 4.2) {
+        if (h && h.jy === 0 && (h.vel.x * nx + h.vel.z * nz) * sgn > 4.2) {
           S.chargeCD = 2.5;
-          if (Math.random() < 0.3) { callFoul(h, df, 'charge'); continue; }
-          if (Math.random() < 0.12) { callFoul(df, h, 'block'); continue; }
+          // NBA 判法：防守者站定（幾乎不動）、面對持球者、不在籃下合理衝撞區（4 呎半圓）內 → 帶球撞人；
+          // 防守者還在移動、側身、或站在合理衝撞區裡 → 阻擋犯規（裁判不是每次都吹）
+          const dsp = hyp(df.vel.x, df.vel.z), faceDot = Math.sin(df.facing) * (h.pos.x - df.pos.x) + Math.cos(df.facing) * (h.pos.z - df.pos.z);
+          const inRA = hyp(df.pos.x - basketX(h.team), df.pos.z) < RA_R + 0.1;
+          const set = dsp < 0.6 && faceDot > 0.15 && df.pose === 'defense';
+          if (set && !inRA) { if (Math.random() < 0.15) { callFoul(h, df, 'charge'); continue; } }
+          else if (Math.random() < (inRA ? 0.15 : 0.07)) { callFoul(df, h, 'block'); continue; }
         }
       }
       const wa = a.post && a.team !== b.team ? 0.2 : (b.post && a.team !== b.team ? 0.8 : 0.5);
@@ -2767,7 +2787,7 @@ function render(dt) {
       vis = lb.add(hb.pos); vis.y = Math.max(BALL_R, vis.y);
       // 跟手掌的位置混合，避免骨架比例不同造成球離手
       const hw = handWorld(hb.rig, (hb.hand || 1) > 0); const dh = vis.distanceTo(hw);
-      if (vis.y > 0.75 && dh < 0.45) vis.lerp(hw.addScaledVector(new THREE.Vector3(0, -1, 0), BALL_R + 0.02), 0.6);
+      if (vis.y > 0.6 && dh < 0.45) vis.lerp(hw.addScaledVector(new THREE.Vector3(0, -1, 0), BALL_R + 0.02), clamp((0.45 - dh) / 0.2, 0, 1));
     } else if ((pose === 'dribble' || pose === 'hesi') && hb.mo && clipInfo(hb.mo.name) && clipInfo(hb.mo.name).lows && hb.moW > 0.5) {
       // 真人運球：手最低點把球推出 → 落地 → 彈回手上，跟著手的節奏
       const ci = clipInfo(hb.mo.name), top = handWorld(hb.rig, (hb.hand || 1) > 0); top.y -= BALL_R + 0.03;
@@ -2793,6 +2813,12 @@ function render(dt) {
       const two = pose === 'clutch' || (hb.dunk && hb.dunk.style === 'two');
       vis = two ? handWorld(hb.rig, true).add(handWorld(hb.rig, false)).multiplyScalar(0.5).addScaledVector(fwd(hb), 0.06) : handWorld(hb.rig, true).addScaledVector(fwd(hb), 0.05);
       vis.y += 0.08;
+    }
+    // 運球時球在高處、靠近手掌：直接貼在手掌下（球在手上），越遠越不貼（球往下運出去時就離手）
+    if ((pose === 'dribble' || pose === 'xover' || pose === 'behind' || pose === 'cross' || pose === 'hesi') && vis.y > 0.55) {
+      const hw2 = handWorld(hb.rig, (hb.hand || 1) > 0), hw3 = handWorld(hb.rig, (hb.hand || 1) < 0);
+      const near = vis.distanceTo(hw2) <= vis.distanceTo(hw3) ? hw2 : hw3, dh2 = vis.distanceTo(near);
+      if (dh2 < 0.42) vis.lerp(near.addScaledVector(new THREE.Vector3(0, -1, 0), BALL_R + 0.02), clamp((0.42 - dh2) / 0.18, 0, 1));
     }
     // 換動作（例如換手運球做完、接回一般運球）時，球的位置用 0.15 秒平順接過去，不會瞬間跳開
     const src = pose + '|' + (hb.mo && hb.moW > 0.5 ? hb.mo.name : '');
@@ -2974,5 +3000,5 @@ for (let t = 0; t < 2; t++) roster[t].forEach(p => { if (!p.onCourt) p.pos.copy(
 startTipoff(); S.phase = 'title'; ball.state = 'dead'; ball.pos.set(0, BALL_R, 1);
 camLook.set(0, 0.6, 0);
 if (AUTO) { S.qlen = +(params.get('q') || 60); S.diff = 1; newGame(); }
-window.__g = { startFT, setRunOfs: v => { RUN_OFS = v; }, THREE, scene, referee, doMove, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
+window.__g = { clipInfo, startFT, setRunOfs: v => { RUN_OFS = v; }, THREE, scene, referee, doMove, shotProb, doPass, callTimeout, extras, tutRing, renderer, S, ball, get players() { return players; }, get teams() { return teams; }, roster, get ctrl() { return ctrl; }, camera, inp, newGame, tick(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); }, step(n, dt = 1 / 60) { for (let i = 0; i < n; i++) update(dt); realDt = dt; render(dt); } };
 requestAnimationFrame(frame);
